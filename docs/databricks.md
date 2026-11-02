@@ -133,6 +133,19 @@ Run the same command again without changing the source or checkpoints. The
 business results and bronze count should stay unchanged. Save both run URLs and
 task outputs. The job ID/run ID in the UI must match the recorded run context.
 
+To exercise a failure through the actual four-task job, deliberately fail its
+final validation task:
+
+```bash
+databricks bundle run -t dev --profile TELEMETRY --var catalog=YOUR_CATALOG telemetry_pipeline --params force_gold_assertion_failure=true
+```
+
+Expect `validate_publish` to fail and no publication row for that failed run ID.
+Then run the ordinary command again (the default flag is false), preserving the
+same checkpoints. Verify the retry succeeds without increasing bronze or logical
+event counts. This checks task orchestration in addition to the acceptance
+module's function-level failure tests.
+
 The pipeline reads raw text using Auto Loader and uses the finite
 `AvailableNow` trigger. On serverless, this avoids unsupported continuously
 running triggers. It uses the workspace's existing `spark` session and Spark

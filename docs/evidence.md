@@ -9,7 +9,8 @@ Implementation and local verification date: 2026-11-02 UTC.
 - Separate local Delta paths from Unity Catalog managed tables; preserve cloud URI strings and use workspace Spark in native notebooks.
 - Pass notebook parameters explicitly; share one actual job run ID across the four serverless tasks.
 - Persist checkpoint identities and reject unsafe checkpoint reuse/loss; document isolated rebuilds.
-- Correct Docker's Python version and add an independent required-Spark CI job.
+- Correct Docker's Python version and add required-Spark CI plus a container integration smoke.
+- Resolve local warehouse paths before Ivy startup and align Python/worker timestamp conversion with UTC.
 - Add a deployable bundle and real, opt-in workspace acceptance runner.
 
 ## Current local verification
@@ -34,8 +35,9 @@ python -m pytest -m 'not spark' -q --junitxml=validation/lightweight.xml
 python -m pytest -m spark --require-spark-tests -vv --junitxml=validation/spark.xml
 ```
 
-Final suite results are recorded in `docs/validation-2026-11-02.json` after the
-suite completes. The tests include all 13 original Spark cases plus numeric and
+The final local result is **45 lightweight tests passed** plus **15 Spark/Delta
+integration tests passed** (22m 51.76s), with no skips in the integration run.
+Machine-readable results are in [validation-2026-11-02.json](validation-2026-11-02.json). The tests include all 13 original Spark cases plus numeric and
 timestamp quarantine and unsafe checkpoint reset / isolated reference rebuild.
 The reference assertions cover 105 raw occurrences, 102 valid, 3 invalid,
 101 ledger versions, 100 READY events, and reconciliation of all three gold marts.
@@ -52,11 +54,23 @@ reported **26 passed, 1 skipped**, because it installed only dependency-light
 extras. The original author's **39 passed** report is preserved separately in
 [historical evidence](evidence-original.md); those are different evidence sources.
 
-The updated workflow runs independent lightweight and Spark jobs, with Java 21
+The updated workflow runs independent lightweight, Spark, and Docker smoke jobs, with Java 21
 and Python 3.12. The Spark job explicitly requires integration execution and fails
 if the selected tests skip. Logs and JUnit reports are uploaded per commit.
-A configured workflow is not a passing CI result; inspect the checks on the
-implementation pull request for the actual outcome.
+[CI run 41389013563](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41389013563)
+completed successfully on implementation commit
+`e5b758bd04b7b8c3194c415a63ea69874419f8b7`:
+
+| Job | Measured result |
+| --- | --- |
+| Lightweight | 45 passed; 1 Spark module skipped because this job omits Spark dependencies. |
+| Required Spark integration | 15 passed, no skipped integration tests; 1809.39 seconds. |
+| Docker build and integration smoke | Image build passed; selected Spark/Delta test passed in 94.37 seconds. |
+
+The final follow-up commit changes documentation only and uses `[skip ci]` to
+avoid rerunning unchanged executable/test/build files. The linked run and JSON
+identify the exact code commit that was executed. The draft PR is
+[PR #1](https://github.com/prudhviy99/security-telemetry-lakehouse/pull/1).
 
 ## Still requires external execution
 
@@ -66,7 +80,10 @@ implementation pull request for the actual outcome.
 - Actual Lakeflow job/run IDs, measured cloud counts, and the cloud result JSON.
 - Unity Catalog permissions verification; a second-principal denial test remains
   explicitly untested if the account cannot supply another identity.
-- Docker image build/run: Docker is installed, but this session cannot access its daemon.
+
+The local Docker daemon is unavailable to this session. The image was instead
+built and run by the Docker smoke job on GitHub Actions; its recorded outcome
+is included in the validation JSON and linked CI run.
 
 No Databricks result, deployment, permission grant, throughput improvement, or
 production-scale claim is made. The project collects small batches and touched
