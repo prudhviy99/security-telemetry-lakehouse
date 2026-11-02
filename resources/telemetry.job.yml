@@ -1,0 +1,106 @@
+# No cluster definitions: these notebook tasks use serverless compute.
+# The environment installs only our pure-Python wheel, never the local Spark extra.
+resources:
+  jobs:
+    telemetry_pipeline:
+      name: security_telemetry_pipeline
+      max_concurrent_runs: 1
+      timeout_seconds: 7200
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: namespace
+          default: ${var.namespace}
+        - name: events_path
+          default: /Volumes/${var.catalog}/${var.namespace}/${var.volume}/reference/events
+        - name: customers_path
+          default: /Volumes/${var.catalog}/${var.namespace}/${var.volume}/reference/customers.jsonl
+        - name: checkpoint_root
+          default: /Volumes/${var.catalog}/${var.namespace}/${var.volume}/checkpoints
+        - name: stream_generation
+          default: ${var.stream_generation}
+        - name: force_gold_assertion_failure
+          default: "false"
+      tasks:
+        - task_key: bronze
+          environment_key: telemetry
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/01_bronze.py
+            base_parameters:
+              backend: "databricks"
+              catalog: "{{job.parameters.catalog}}"
+              namespace: "{{job.parameters.namespace}}"
+              events_path: "{{job.parameters.events_path}}"
+              customers_path: "{{job.parameters.customers_path}}"
+              bronze_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/bronze"
+              silver_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/silver"
+              stream_generation: "{{job.parameters.stream_generation}}"
+              job_run_id: "{{job.run_id}}"
+              use_auto_loader: "true"
+              force_gold_assertion_failure: "{{job.parameters.force_gold_assertion_failure}}"
+        - task_key: silver
+          depends_on:
+            - task_key: bronze
+          environment_key: telemetry
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/02_silver.py
+            base_parameters:
+              backend: "databricks"
+              catalog: "{{job.parameters.catalog}}"
+              namespace: "{{job.parameters.namespace}}"
+              events_path: "{{job.parameters.events_path}}"
+              customers_path: "{{job.parameters.customers_path}}"
+              bronze_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/bronze"
+              silver_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/silver"
+              stream_generation: "{{job.parameters.stream_generation}}"
+              job_run_id: "{{job.run_id}}"
+              use_auto_loader: "true"
+              force_gold_assertion_failure: "{{job.parameters.force_gold_assertion_failure}}"
+        - task_key: gold
+          depends_on:
+            - task_key: silver
+          environment_key: telemetry
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/03_gold_validate.py
+            base_parameters:
+              backend: "databricks"
+              catalog: "{{job.parameters.catalog}}"
+              namespace: "{{job.parameters.namespace}}"
+              events_path: "{{job.parameters.events_path}}"
+              customers_path: "{{job.parameters.customers_path}}"
+              bronze_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/bronze"
+              silver_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/silver"
+              stream_generation: "{{job.parameters.stream_generation}}"
+              job_run_id: "{{job.run_id}}"
+              use_auto_loader: "true"
+              force_gold_assertion_failure: "{{job.parameters.force_gold_assertion_failure}}"
+              stage: "gold"
+        - task_key: validate_publish
+          depends_on:
+            - task_key: gold
+          environment_key: telemetry
+          max_retries: 0
+          notebook_task:
+            notebook_path: ../notebooks/03_gold_validate.py
+            base_parameters:
+              backend: "databricks"
+              catalog: "{{job.parameters.catalog}}"
+              namespace: "{{job.parameters.namespace}}"
+              events_path: "{{job.parameters.events_path}}"
+              customers_path: "{{job.parameters.customers_path}}"
+              bronze_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/bronze"
+              silver_checkpoint: "{{job.parameters.checkpoint_root}}/{{job.parameters.stream_generation}}/silver"
+              stream_generation: "{{job.parameters.stream_generation}}"
+              job_run_id: "{{job.run_id}}"
+              use_auto_loader: "true"
+              force_gold_assertion_failure: "{{job.parameters.force_gold_assertion_failure}}"
+              stage: "validate"
+      environments:
+        - environment_key: telemetry
+          spec:
+            environment_version: "${var.environment_version}"
+            dependencies:
+              - ../dist/*.whl

@@ -14,3 +14,7 @@ spark-warehouse/
 .ivy2/
 *.pyc
 .spark-local/
+validation/
+.tools/
+.databricks/
+.bundle/

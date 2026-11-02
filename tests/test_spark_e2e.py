@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -469,3 +470,105 @@ def test_checkpoint_inside_input_is_rejected(spark, tmp_path: Path):
     config.bronze_checkpoint = landing / "checkpoints"
     with pytest.raises(RuntimeError, match="outside the input"):
         _run(spark, config)
+
+
+def test_storage_boundary_inputs_are_quarantined_before_delta_writes(spark, tmp_path: Path):
+    """One invalid source row must not poison the batch or analytical doubles."""
+    invalid = {
+        "duration-overflow": (
+            _line(event_id="duration-overflow").replace('"duration_ms":10', '"duration_ms":1e309'),
+            "invalid_duration",
+        ),
+        "version-overflow": (
+            _line(event_id="version-overflow", event_version=2**63),
+            "invalid_event_version",
+        ),
+        "event-utc-underflow": (
+            _line(event_id="event-utc-underflow", event_ts="0001-01-01T00:00:00+01:00"),
+            "invalid_timestamp:event_ts",
+        ),
+        "receipt-utc-underflow": (
+            _line(event_id="receipt-utc-underflow", received_ts="0001-01-01T00:00:00+01:00"),
+            "invalid_timestamp:received_ts",
+        ),
+        "event-bad-offset": (
+            _line(event_id="event-bad-offset", event_ts="2026-06-01T12:00:00+00:99"),
+            "invalid_timestamp:event_ts",
+        ),
+        "receipt-bad-offset": (
+            _line(event_id="receipt-bad-offset", received_ts="2026-06-01T12:10:00+00:99"),
+            "invalid_timestamp:received_ts",
+        ),
+    }
+    events_path, customers_path = _write_inputs(
+        tmp_path,
+        [
+            _line(event_id="valid-control", duration_ms=10),
+            _line(event_id="valid-max-version", event_version=2**63 - 1, duration_ms=0),
+            *[line for line, _reason in invalid.values()],
+        ],
+        _customers("cust-001"),
+    )
+    config = _config(tmp_path, events_path, customers_path, "storage-boundaries")
+    summary = _run(spark, config)
+    assert summary["raw_rows"] == 8
+    assert summary["valid_rows"] == 2
+    assert summary["invalid_rows"] == 6
+    assert summary["ready_events"] == 2
+    assert summary["ledger_versions"] == 2
+    actual_invalid = {
+        json.loads(row.raw_json)["event_id"]: row.quality_reason
+        for row in spark.table(config.qualified("quarantine_events")).select("raw_json", "quality_reason").collect()
+    }
+    assert actual_invalid == {event_id: reason for event_id, (_line_text, reason) in invalid.items()}
+    assert _rows(spark, config, "silver_events", ["event_id", "event_version"]) == [
+        ("valid-control", 1),
+        ("valid-max-version", 2**63 - 1),
+    ]
+    for table in ("gold_device_day", "gold_product_version_day", "gold_signup_cohort_day"):
+        assert _rows(spark, config, table, ["accepted_event_count", "scan_count", "avg_scan_duration_ms"]) == [
+            (2, 2, 5.0)
+        ]
+
+
+def test_checkpoint_loss_is_rejected_and_isolated_rebuild_preserves_original(spark, tmp_path: Path):
+    """Recovery retains progress; a rebuild gets a new target and stream generation."""
+    from telemetry.transforms import UnsafeCheckpointReset
+
+    events_path = ROOT / "data" / "events.jsonl"
+    customers_path = ROOT / "data" / "customers.jsonl"
+    original = _config(
+        tmp_path / "original", events_path, customers_path, "rebuild-original", stream_generation="initial"
+    )
+    original_summary = _run(spark, original)
+    columns = {
+        "bronze_events": ["raw_json"],
+        "silver_event_versions": ["event_id", "event_version", "payload_hash", "duration_ms"],
+        "silver_current": ["event_id", "state", "event_version", "payload_hash"],
+        "quarantine_events": ["quality_reason", "raw_json"],
+        "gold_device_day": ["event_date", "customer_id", "device_id", "accepted_event_count", "failed_scan_count"],
+        "gold_product_version_day": ["event_date", "product_version", "accepted_event_count", "active_device_count"],
+        "gold_signup_cohort_day": ["event_date", "signup_month", "plan_tier", "accepted_event_count", "active_device_count"],
+    }
+    original_rows = {table: _rows(spark, original, table, selected) for table, selected in columns.items()}
+    # Delete only a test-owned temporary checkpoint. Retained target data must
+    # trigger a clear rejection before a new batch can be silently skipped.
+    shutil.rmtree(original.bronze_checkpoint)
+    original.job_run_id = "unsafe-reset-attempt"
+    with pytest.raises(UnsafeCheckpointReset):
+        _run(spark, original)
+
+    rebuilt = _config(
+        tmp_path / "rebuilt", events_path, customers_path, "rebuild-fresh", stream_generation="rebuild"
+    )
+    rebuilt_summary = _run(spark, rebuilt)
+    expected_counts = {"raw_rows": 105, "valid_rows": 102, "invalid_rows": 3, "ledger_versions": 101, "ready_events": 100}
+    for key, expected in expected_counts.items():
+        assert original_summary[key] == rebuilt_summary[key] == expected
+    assert original.namespace != rebuilt.namespace
+    assert original.stream_generation != rebuilt.stream_generation
+    assert original.bronze_checkpoint != rebuilt.bronze_checkpoint
+    assert original.silver_checkpoint != rebuilt.silver_checkpoint
+    for table, selected in columns.items():
+        assert _rows(spark, rebuilt, table, selected) == original_rows[table]
+        assert _rows(spark, original, table, selected) == original_rows[table]

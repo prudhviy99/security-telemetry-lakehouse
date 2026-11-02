@@ -1,0 +1,41 @@
+bundle:
+  name: security_telemetry_lakehouse
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Existing Unity Catalog catalog where you can create a demo schema.
+  namespace:
+    description: Dedicated demo schema; never point this at production tables.
+    default: security_telemetry_demo
+  volume:
+    description: Existing managed volume for source files and durable checkpoints.
+    default: pipeline_files
+  stream_generation:
+    description: Persistent generation identity. Keep unchanged across ordinary runs and retries.
+    default: v1
+  environment_version:
+    description: Supported serverless Python environment version.
+    default: "5"
+
+artifacts:
+  telemetry_wheel:
+    type: whl
+    path: .
+    build: python -m pip wheel --no-deps --wheel-dir dist .
+
+sync:
+  exclude:
+    - .venv/**
+    - warehouse/**
+    - checkpoints/**
+    - docs/evidence-*.json
+
+targets:
+  dev:
+    default: true
+    mode: development
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

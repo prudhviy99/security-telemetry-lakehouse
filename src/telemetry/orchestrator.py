@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from telemetry.config import DEFAULT_NAMESPACE, PipelineConfig
@@ -12,37 +13,45 @@ from telemetry.job import job_definition
 from telemetry.locking import SingleRunLock
 
 
-def config_from_env() -> PipelineConfig:
-    def param(name: str, default: str) -> str:
-        dbutils = globals().get("dbutils")
-        if dbutils is not None:
-            try:
-                dbutils.widgets.text(name, default)
-                value = dbutils.widgets.get(name)
-                if value:
-                    return value
-            except Exception:
-                pass
-        return os.environ.get(name, default)
+def config_from_env(parameters: Mapping[str, str] | None = None) -> PipelineConfig:
+    """Read explicit notebook widgets or environment variables.
 
-    catalog = param("catalog", param("TELEMETRY_CATALOG", "local"))
-    namespace = param("namespace", param("TELEMETRY_NAMESPACE", DEFAULT_NAMESPACE))
+    A notebook passes its widget dictionary here. Imported modules do not share
+    notebook globals such as dbutils. Explicit values take precedence over the
+    environment, and cloud values are kept as strings until the config adapter.
+    """
+    parameters = {} if parameters is None else parameters
+
+    def param(name: str, env: str, default: str = "") -> str:
+        return str(parameters.get(name, os.environ.get(env, default)))
+
+    def flag(name: str, env: str, default: str = "false") -> bool:
+        value = param(name, env, default).strip().lower()
+        if value not in {"true", "false"}:
+            raise ValueError(f"{name} must be true or false")
+        return value == "true"
+
+    backend = param("backend", "TELEMETRY_BACKEND", "local")
+    cloud = backend == "databricks"
+    bronze_checkpoint = param("bronze_checkpoint", "TELEMETRY_BRONZE_CHECKPOINT", "" if cloud else "checkpoints/bronze")
+    silver_checkpoint = param("silver_checkpoint", "TELEMETRY_SILVER_CHECKPOINT", "" if cloud else "checkpoints/silver")
     return PipelineConfig(
-        events_path=Path(param("events_path", param("TELEMETRY_EVENTS", "data/events.jsonl"))),
-        customers_path=Path(param("customers_path", param("TELEMETRY_CUSTOMERS", "data/customers.jsonl"))),
-        warehouse=Path(param("warehouse_path", param("TELEMETRY_WAREHOUSE", "warehouse"))),
-        namespace=namespace,
-        catalog=catalog,
-        bronze_checkpoint=Path(param("bronze_checkpoint", param("TELEMETRY_BRONZE_CHECKPOINT", "checkpoints/bronze"))),
-        silver_checkpoint=Path(param("silver_checkpoint", param("TELEMETRY_SILVER_CHECKPOINT", "checkpoints/silver"))),
-        use_auto_loader=param("use_auto_loader", param("TELEMETRY_USE_AUTO_LOADER", "false")).lower() == "true",
-        job_run_id=param("job_run_id", param("TELEMETRY_JOB_RUN_ID", "")),
-        force_gold_assertion_failure=param(
-            "force_gold_assertion_failure",
-            param("TELEMETRY_FORCE_GOLD_ASSERTION_FAILURE", "false"),
-        ).lower()
-        == "true",
-        shuffle_partitions=int(param("shuffle_partitions", param("TELEMETRY_SHUFFLE_PARTITIONS", "1"))),
+        events_path=param("events_path", "TELEMETRY_EVENTS", "" if cloud else "data/events.jsonl"),
+        customers_path=param("customers_path", "TELEMETRY_CUSTOMERS", "" if cloud else "data/customers.jsonl"),
+        warehouse=param("warehouse_path", "TELEMETRY_WAREHOUSE", "warehouse"),
+        namespace=param("namespace", "TELEMETRY_NAMESPACE", "" if cloud else DEFAULT_NAMESPACE),
+        catalog=param("catalog", "TELEMETRY_CATALOG", "" if cloud else "local"),
+        backend=backend,
+        bronze_checkpoint=bronze_checkpoint or None,
+        silver_checkpoint=silver_checkpoint or None,
+        use_auto_loader=flag("use_auto_loader", "TELEMETRY_USE_AUTO_LOADER", "true" if cloud else "false"),
+        stream_generation=param("stream_generation", "TELEMETRY_STREAM_GENERATION", "v1"),
+        bronze_stream_id=param("bronze_stream_id", "TELEMETRY_BRONZE_STREAM_ID", "bronze_events"),
+        silver_stream_id=param("silver_stream_id", "TELEMETRY_SILVER_STREAM_ID", "silver_events"),
+        job_run_id=param("job_run_id", "TELEMETRY_JOB_RUN_ID"),
+        force_gold_assertion_failure=flag("force_gold_assertion_failure", "TELEMETRY_FORCE_GOLD_ASSERTION_FAILURE"),
+        fail_after_sinks=[item.strip() for item in param("fail_after_sinks", "TELEMETRY_FAIL_AFTER_SINKS").split(",") if item.strip()],
+        shuffle_partitions=int(param("shuffle_partitions", "TELEMETRY_SHUFFLE_PARTITIONS", "1")),
     )
 
 
@@ -56,6 +65,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--bronze-checkpoint", type=Path, default=Path("checkpoints/bronze"))
     parser.add_argument("--silver-checkpoint", type=Path, default=Path("checkpoints/silver"))
     parser.add_argument("--job-run-id", default="")
+    parser.add_argument("--stream-generation", default="v1", help="Stable for retries; change only for an isolated rebuild")
+    parser.add_argument("--bronze-stream-id", default="bronze_events")
+    parser.add_argument("--silver-stream-id", default="silver_events")
     parser.add_argument("--shuffle-partitions", type=int, default=1)
     parser.add_argument("--use-auto-loader", action="store_true")
     parser.add_argument("--force-gold-assertion-failure", action="store_true")
@@ -64,6 +76,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.print_job:
         print(json.dumps(job_definition(), indent=2))
         return
+    if args.use_auto_loader or args.catalog not in {"local", "spark_catalog"}:
+        parser.error("This CLI starts local Spark. Use the Databricks bundle for Auto Loader and Unity Catalog.")
 
     # Spark imports stay inside the command so contract tests do not need PySpark.
     from telemetry.spark_session import get_spark
@@ -79,6 +93,9 @@ def main(argv: list[str] | None = None) -> None:
         silver_checkpoint=args.silver_checkpoint,
         use_auto_loader=args.use_auto_loader,
         job_run_id=args.job_run_id,
+        stream_generation=args.stream_generation,
+        bronze_stream_id=args.bronze_stream_id,
+        silver_stream_id=args.silver_stream_id,
         force_gold_assertion_failure=args.force_gold_assertion_failure,
         shuffle_partitions=args.shuffle_partitions,
     )

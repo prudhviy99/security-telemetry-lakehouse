@@ -1,41 +1,47 @@
 # Databricks notebook source
-# Gold full rebuild and publication validation.
-#
-# stage=gold rebuilds marts from the READY view.
-# stage=validate reconciles grains and rates, then writes the publication
-# marker. An assertion failure does not advance that marker. The marker does
-# not make the three gold tables atomically visible.
+# Two separate job tasks share this notebook: gold, then validate/publish.
+from telemetry.orchestrator import config_from_env
 
-from __future__ import annotations
+PARAMETER_DEFAULTS = {
+    "backend": "databricks",
+    "catalog": "",
+    "namespace": "",
+    "events_path": "",
+    "customers_path": "",
+    "bronze_checkpoint": "",
+    "silver_checkpoint": "",
+    "stream_generation": "",
+    "job_run_id": "",
+    "use_auto_loader": "true",
+    "force_gold_assertion_failure": "false",
+}
+parameters = {}
+for name, default in PARAMETER_DEFAULTS.items():
+    try:
+        parameters[name] = dbutils.widgets.get(name)
+    except Exception:
+        dbutils.widgets.text(name, default)
+        parameters[name] = dbutils.widgets.get(name)
 
-import os
-import sys
-from pathlib import Path
+config = config_from_env(parameters=parameters)
+# The job environment installs telemetry without its Spark extra.
+# Use Databricks' provided Spark session; never initialize local[2] here.
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+import json
 
-from telemetry.orchestrator import config_from_env  # noqa: E402
-from telemetry.spark_session import get_spark  # noqa: E402
-from telemetry.transforms import run_gold, run_validation  # noqa: E402
+from telemetry.transforms import quality_counts, run_gold, run_validation
 
-
-def main() -> None:
-    config = config_from_env()
-    spark = get_spark(config.warehouse, shuffle_partitions=config.shuffle_partitions)
-    stage = os.environ.get("TELEMETRY_STAGE", "all")
-    dbutils = globals().get("dbutils")
-    if dbutils is not None:
-        try:
-            dbutils.widgets.text("stage", stage)
-            stage = dbutils.widgets.get("stage") or stage
-        except Exception:
-            pass
-    if stage in {"gold", "all"}:
-        run_gold(spark, config)
-    if stage in {"validate", "all"}:
-        run_validation(spark, config)
-
-
-if __name__ == "__main__":
-    main()
+try:
+    stage = dbutils.widgets.get("stage")
+except Exception:
+    dbutils.widgets.text("stage", "")
+    stage = dbutils.widgets.get("stage")
+if stage == "gold":
+    run_gold(spark, config)
+    print("GOLD_REBUILT", config.job_run_id)
+elif stage == "validate":
+    run_validation(spark, config)
+    print("PIPELINE_SUMMARY " + json.dumps(quality_counts(spark, config), sort_keys=True))
+else:
+    raise ValueError("stage must be gold or validate; use the corresponding job task")
