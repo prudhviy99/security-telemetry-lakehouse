@@ -170,6 +170,16 @@ The required-Spark flag fails when integration tests are absent or skipped. Run 
 
 ## Databricks execution
 
+For an authenticated normal terminal, the [deployment helper](scripts/deploy_databricks.py) automates the setup and checks below. It selects an actual catalog returned by your workspace, creates the dedicated schema and managed volume when absent, verifies immutable uploads byte for byte, deploys the bundle, runs the reference job twice, and runs acceptance. `--extended` also enables the larger recovery suite and may consume more Free Edition quota.
+
+```bash
+# Only needed if Python 3.11+ is unavailable:
+brew install python@3.12
+python3 scripts/deploy_databricks.py --extended
+```
+
+The helper reuses the `TELEMETRY` profile and its existing secure credential storage. It does not export tokens, overwrite input files, delete checkpoints, create a schedule, or change grants. CLI logs and a source/input summary go under the ignored `validation/` directory. A successful command sequence still requires reviewing the measured acceptance report before publishing cloud counts.
+
 A Free Edition account is enough to start this demo. A signed-in browser does not authenticate your terminal. Use the supported OAuth CLI flow, then select an actual catalog returned by your workspace:
 
 ```bash

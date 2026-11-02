@@ -108,3 +108,12 @@ links the existing completion branch and the supported OAuth/CLI setup path.
 
 This follow-up changes documentation only. Existing measured test totals remain
 attributed to the linked implementation CI run; they are not new cloud results.
+
+
+## Supported terminal deployment helper
+
+The CLI is now installed (v1.23.0), and a `TELEMETRY` profile points to the workspace. In the follow-up agent session, `current-user me`, profile validation, and bundle validation report `no cached credentials`; `auth describe` identifies secure OS-keyring storage. A direct request to the workspace's public OAuth discovery URL also fails with `Could not resolve host`. These observations do not establish that the user's normal-terminal login failed; they establish that this agent environment cannot execute authenticated workspace operations.
+
+`scripts/deploy_databricks.py` provides a supported normal-terminal handoff without exporting tokens or changing credential storage. It performs catalog selection, dedicated schema/managed-volume setup, byte-verified immutable uploads, bundle build/deploy, reference/no-op runs, and cloud acceptance. Extended recovery checks are opt-in. It writes actual CLI output and a source/input summary, while leaving measured cloud counts to the acceptance report.
+
+Six dependency-free tests passed with `python3 -m unittest tests.test_deploy_helper -v`. They cover actual-response catalog selection, rejection of an invented catalog, unchanged replay parameters, immutable-file reuse, mismatched-input rejection, and propagation of a remote-read failure. Help output, Python syntax, and whitespace checks passed. No new Spark or Databricks execution is claimed for this helper change; pipeline/runtime/container sources remain the versions covered by the earlier CI evidence.

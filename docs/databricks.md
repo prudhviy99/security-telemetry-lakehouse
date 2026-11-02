@@ -69,6 +69,20 @@ After login, `catalogs list` supplies the actual catalog names for Step 2.
 If this checkout already has `.tools/databricks`, it is a local CLI executable;
 you may use that path in place of `databricks`. It is not a credential.
 
+### If login works in your terminal but fails in an agent session
+
+Run `databricks current-user me --profile TELEMETRY` in your normal terminal. A profile can exist while an isolated agent process cannot retrieve its macOS Keychain token. Also check that the process can reach your workspace hostname. A reported missing cache or DNS failure is an access blocker; do not repeat login blindly or copy tokens into chat.
+
+Once that normal terminal is authenticated and networked, run the checked-in helper from this branch:
+
+```bash
+# Install a supported build interpreter if needed.
+brew install python@3.12
+python3 scripts/deploy_databricks.py --profile TELEMETRY --extended
+```
+
+The helper does not change authentication storage. It reads actual catalog names and picks `workspace` if present, otherwise the sole non-system catalog. If several alternatives remain, pass `--catalog YOUR_CATALOG`. It creates only the dedicated schema/managed volume, verifies immutable uploads, builds/deploys the bundle, runs the reference twice, and runs acceptance. Use a fresh `--namespace` for an isolated new experiment. Logs and the source/input summary are saved under ignored `validation/`; retrieve the actual acceptance report as described in Step 7.
+
 ## 4. Upload the committed reference fixtures
 
 Run these commands from the repository root. Replace `YOUR_CATALOG` in the
