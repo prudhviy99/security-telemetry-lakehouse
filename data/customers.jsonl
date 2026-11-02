@@ -1,0 +1,12 @@
+{"acquisition_channel":"organic","country_code":"US","customer_id":"cust-001","plan_tier":"free","signup_date":"2025-01-18","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"referral","country_code":"CA","customer_id":"cust-002","plan_tier":"premium","signup_date":"2025-02-04","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"paid","country_code":"GB","customer_id":"cust-003","plan_tier":"family","signup_date":"2025-02-21","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"organic","country_code":"DE","customer_id":"cust-004","plan_tier":"free","signup_date":"2025-03-10","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"referral","country_code":"IN","customer_id":"cust-005","plan_tier":"premium","signup_date":"2025-03-27","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"paid","country_code":"AU","customer_id":"cust-006","plan_tier":"family","signup_date":"2025-04-13","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"organic","country_code":"FR","customer_id":"cust-007","plan_tier":"free","signup_date":"2025-04-30","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"referral","country_code":"JP","customer_id":"cust-008","plan_tier":"premium","signup_date":"2025-05-17","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"paid","country_code":"BR","customer_id":"cust-009","plan_tier":"family","signup_date":"2025-06-03","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"organic","country_code":"MX","customer_id":"cust-010","plan_tier":"free","signup_date":"2025-06-20","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"referral","country_code":"SE","customer_id":"cust-011","plan_tier":"premium","signup_date":"2025-07-07","updated_at":"2026-05-01T00:00:00.000000Z"}
+{"acquisition_channel":"paid","country_code":"NL","customer_id":"cust-012","plan_tier":"family","signup_date":"2025-07-24","updated_at":"2026-05-01T00:00:00.000000Z"}

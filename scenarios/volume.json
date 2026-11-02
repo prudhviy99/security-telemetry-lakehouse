@@ -1,0 +1,12 @@
+{
+  "name": "volume",
+  "seed": 20261101,
+  "customer_count": 200,
+  "logical_events": 10000,
+  "base_date": "2026-06-01",
+  "day_span": 28,
+  "product_versions": ["1.0.0", "1.1.0", "1.2.0"],
+  "single_file": false,
+  "output_files": 4,
+  "invalid_cases": []
+}

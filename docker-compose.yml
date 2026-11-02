@@ -1,0 +1,6 @@
+services:
+  lakehouse-tests:
+    build: .
+    image: security-telemetry-lakehouse
+    working_dir: /app
+    command: ["pytest", "-q"]

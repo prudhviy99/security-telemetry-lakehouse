@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "security-telemetry-lakehouse"
+version = "0.1.0"
+description = "Local Spark and Delta lakehouse for synthetic endpoint security telemetry."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Prudhvi Yalamanchili" }]
+dependencies = []
+
+[project.optional-dependencies]
+spark = ["pyspark==4.2.0", "delta-spark==4.4.1"]
+dev = ["pytest==8.3.5"]
+
+[project.scripts]
+telemetry-generate = "telemetry.generate:main"
+telemetry-pipeline = "telemetry.orchestrator:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "spark: local Apache Spark and Delta Lake integration test",
+]

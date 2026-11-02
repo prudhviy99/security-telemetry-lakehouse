@@ -1,0 +1,23 @@
+{
+  "name": "reference",
+  "seed": 20261101,
+  "customer_count": 12,
+  "logical_events": 100,
+  "base_date": "2026-06-01",
+  "day_span": 14,
+  "product_versions": ["1.0.0", "1.1.0", "1.2.0"],
+  "single_file": true,
+  "duplicate_event_number": 1,
+  "revision_event_number": 2,
+  "revision_product_version": "1.2.1",
+  "unknown_customer_event_number": 3,
+  "unknown_customer_id": "cust-unknown",
+  "utc_boundary_event_number": 10,
+  "utc_boundary_event_ts": "2026-06-02T03:30:00+05:00",
+  "utc_boundary_received_ts": "2026-06-02T04:00:00+05:00",
+  "old_event_number": 11,
+  "old_event_ts": "2026-01-01T00:00:00Z",
+  "old_received_ts": "2026-06-01T00:00:00Z",
+  "fractional_duration_event_number": 4,
+  "invalid_cases": ["missing_event_id", "unsupported_event_type", "event_ts_ahead"]
+}
