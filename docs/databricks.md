@@ -51,6 +51,7 @@ brew install databricks/tap/databricks
 databricks version
 databricks auth login --host https://YOUR_ACTUAL_WORKSPACE_HOST --profile TELEMETRY
 databricks current-user me --profile TELEMETRY
+databricks catalogs list --profile TELEMETRY
 ```
 
 The login opens a browser. Complete it yourself. Do not paste tokens or
@@ -58,7 +59,12 @@ credentials into a chat, source code, or a report. The workspace host is the
 workspace URL, not an account-console URL. Other install methods and the OAuth
 flow are in the [CLI install](https://docs.databricks.com/aws/en/dev-tools/cli/install)
 and [authentication](https://docs.databricks.com/aws/en/dev-tools/cli/authentication)
-documentation. A CLI executable alone does not mean authentication is configured.
+documentation. A CLI executable alone does not mean authentication is configured. A browser
+already signed in to the workspace does not authenticate this terminal either.
+If the console displays "The Databricks console doesn't support automated
+browser control", use this supported OAuth/CLI route for agent work. Complete
+the browser OAuth prompt yourself; keep credentials out of the repository.
+After login, `catalogs list` supplies the actual catalog names for Step 2.
 
 If this checkout already has `.tools/databricks`, it is a local CLI executable;
 you may use that path in place of `databricks`. It is not a credential.

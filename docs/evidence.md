@@ -88,3 +88,23 @@ is included in the validation JSON and linked CI run.
 No Databricks result, deployment, permission grant, throughput improvement, or
 production-scale claim is made. The project collects small batches and touched
 version histories on the driver, and rebuilds gold tables independently.
+
+
+## Follow-up verification and workspace handoff
+
+On November 1, 2026 Pacific (November 2 UTC), the existing GitHub Actions jobs
+were inspected directly: `contract-tests`, `spark-tests`, and `docker-smoke`
+all reported `success`. Comparing the implementation commit with PR head
+`62791c6` confirmed that only `docs/databricks.md`, `docs/evidence.md`, and the
+validation JSON changed after the tested executable code.
+
+The signed-in Free Edition workspace was reached. Its console displayed:
+"Automated browser control detected. The Databricks console doesn't support
+automated browser control. Continue manually, or connect your agent through
+Genie One MCP." No Databricks connector or authenticated CLI profile was
+available in the follow-up session. Consequently no schema, volume, grant,
+job deployment, or workspace run is claimed from that session. The README now
+links the existing completion branch and the supported OAuth/CLI setup path.
+
+This follow-up changes documentation only. Existing measured test totals remain
+attributed to the linked implementation CI run; they are not new cloud results.

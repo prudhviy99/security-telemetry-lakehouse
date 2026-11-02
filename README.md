@@ -4,7 +4,29 @@ Owner: Prudhvi Yalamanchili.
 
 This repository builds a small analytics pipeline for synthetic endpoint telemetry. Product teams need to see whether a release lines up with more scan failures, which customer cohorts are active, and whether the telemetry is trustworthy enough to answer those questions. Raw events arrive as files. They can repeat, arrive late, or correct an earlier version.
 
-Repository: https://github.com/prudhviy99/security-telemetry-lakehouse. A Databricks workspace run has not yet been recorded.
+Repository: [prudhviy99/security-telemetry-lakehouse](https://github.com/prudhviy99/security-telemetry-lakehouse).
+
+## Current status
+
+The completion work is available in [draft PR #1](https://github.com/prudhviy99/security-telemetry-lakehouse/pull/1), on `codex/complete-lakehouse-validation`. A checkout of `main` can still contain the original implementation until that PR is merged. To review the completed version without changing your current checkout:
+
+```bash
+git clone --branch codex/complete-lakehouse-validation \
+  https://github.com/prudhviy99/security-telemetry-lakehouse.git \
+  security-telemetry-lakehouse-review
+cd security-telemetry-lakehouse-review
+```
+
+| Component | Verified status |
+| --- | --- |
+| Validation, version reconciliation, gold marts | 45 lightweight tests passed in CI. |
+| Local Spark/Delta, replay, recovery, isolated rebuild | 15 integration tests passed with no integration skips. |
+| Container | Image build and Spark/Delta smoke test passed in CI. |
+| Databricks adapter and serverless job bundle | Implemented; workspace deployment and execution are pending. |
+| Auto Loader, Unity Catalog, Lakeflow results | No measured workspace run is recorded yet. |
+| Reviewer permissions | Requires a genuine second principal; untested. |
+
+The [successful CI run](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41389013563) identifies the tested implementation commit. See [validation evidence](docs/evidence.md) and the [completion checklist](docs/completion-checklist.md) for the boundary between measured results and remaining work.
 
 The local runtime is Apache Spark, Delta Lake, and Python. The separate Databricks adapter uses Auto Loader, Unity Catalog managed tables, and a deployable serverless Lakeflow job. Local execution and cloud execution are distinct validation targets. See [evidence](docs/evidence.md) for measured results and remaining workspace checks.
 
@@ -57,7 +79,7 @@ Silver is incremental. Bronze is append-only. A structured streaming query with 
 
 Inside each silver batch the code validates rows, canonicalizes the ones that pass, and MERGEs the version ledger. The same canonical payload keeps the earliest receipt time. For every `event_id` touched by the batch, current state is recomputed from all stored versions of that id, not from the micro-batch alone. The greatest version is `READY` when it has one canonical payload. Multiple payloads at that version become `CONFLICT` and drop out of `silver_events`. A later unambiguous higher version becomes `READY` again. Ledger, quarantine, and current-state writes are idempotent, so a failed batch can be resumed from the same checkpoint without duplicating rows. The batch audit row is written last. There is no transaction across those tables.
 
-Gold is a full rebuild from the READY view, and only after silver succeeds. That is deliberate: a late event or a correction has to change the historical UTC day, including removing the old day's contribution. Rebuilding three tables is not atomic. The pipeline reconciles grains, the scan-rate rule, and the sum of device-day accepted events against READY silver before it advances `successful_publication`. The marker means reconciliation passed. It does not make the three gold tables appear at the same instant. An intentional gold assertion failure does not advance the marker. The marker also does not preserve the prior live gold snapshot after partial overwrites. See [retry and rebuild](docs/recovery.md) for checkpoint identity, upgrade, and safe isolated rebuild rules.
+Gold is a full rebuild from the READY view, and only after silver succeeds. That is deliberate: a late event or a correction has to change the historical UTC day, including removing the old day's contribution. Rebuilding three tables is not atomic. The pipeline reconciles grains, the scan-rate rule, and each gold mart's accepted-event total against READY silver before it advances `successful_publication`. The marker means reconciliation passed. It does not make the three gold tables appear at the same instant. An intentional gold assertion failure does not advance the marker. The marker also does not preserve the prior live gold snapshot after partial overwrites. See [retry and rebuild](docs/recovery.md) for checkpoint identity, upgrade, and safe isolated rebuild rules.
 
 ## Canonical payload
 
@@ -97,13 +119,9 @@ Inspect quarantine and a mart:
 ```bash
 python - <<'PY'
 from pathlib import Path
-from pyspark.sql import SparkSession
-from delta import configure_spark_with_delta_pip
-builder = SparkSession.builder.master("local[1]").appName("inspect")
-builder = builder.config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-builder = builder.config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-spark = configure_spark_with_delta_pip(builder).getOrCreate()
-root = Path("warehouse/security_telemetry_demo")
+from telemetry.spark_session import get_spark
+spark = get_spark(Path("warehouse"))
+root = Path("warehouse/security_telemetry_demo").resolve()
 spark.read.format("delta").load(str(root / "quarantine_events")).select("quality_reason", "detail").show(truncate=False)
 spark.read.format("delta").load(str(root / "gold_product_version_day")).orderBy("event_date", "product_version").show(20, truncate=False)
 PY
@@ -151,6 +169,43 @@ pytest -m spark --require-spark-tests -q
 The required-Spark flag fails when integration tests are absent or skipped. Run the complete suite with `pytest --require-spark-tests -q`.
 
 ## Databricks execution
+
+A Free Edition account is enough to start this demo. A signed-in browser does not authenticate your terminal. Use the supported OAuth CLI flow, then select an actual catalog returned by your workspace:
+
+```bash
+brew install databricks/tap/databricks
+# Set this to the URL shown in your workspace's address bar.
+export TELEMETRY_HOST="https://YOUR_WORKSPACE_HOST"
+databricks auth login --host "$TELEMETRY_HOST" --profile TELEMETRY
+databricks current-user me --profile TELEMETRY
+databricks catalogs list --profile TELEMETRY
+```
+
+Follow [Databricks setup](docs/databricks.md) to create the dedicated schema/managed volume and upload the immutable fixtures before deploying. With those prerequisites complete and your Python environment active:
+
+```bash
+export TELEMETRY_CATALOG="YOUR_EXISTING_CATALOG"
+databricks bundle validate -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG"
+databricks bundle deploy -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG"
+databricks bundle run -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG" telemetry_pipeline
+# Repeat with the same inputs/checkpoints to verify the no-op rerun.
+databricks bundle run -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG" telemetry_pipeline
+databricks bundle run -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG" telemetry_acceptance
+```
+
+For an untouched reference fixture, verify these counts in the actual run output:
+
+| Measure | Expected result |
+| --- | ---: |
+| Raw occurrences | 105 |
+| Valid occurrences | 102 |
+| Invalid occurrences | 3 |
+| Canonical ledger versions | 101 |
+| READY events | 100 |
+| Accepted events in each gold mart | 100 |
+
+Record the actual job/run URLs and acceptance report before treating these expected values as cloud results. If the console reports that automated browser control is unsupported, complete setup through the supported CLI; the account's browser login alone does not establish an agent connection.
+
 
 [Databricks setup and acceptance](docs/databricks.md) describes Free Edition signup, workspace OAuth, dedicated schema/volume setup, input upload, bundle deployment, and real cloud checks.
 
