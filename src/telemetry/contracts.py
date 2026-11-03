@@ -29,6 +29,8 @@ from typing import Iterable, Mapping
 CANONICAL_HASH_VERSION = "v1"
 
 EVENT_SCHEMA_VERSION = 1
+# Spark/Delta stores source versions as signed 64-bit integers.
+MAX_EVENT_VERSION = (1 << 63) - 1
 OPTIONAL_EVENT_ATTRIBUTES = ("agent_build",)
 EVENT_TYPES = ("heartbeat", "scan", "threat_detected")
 SCAN_STATUSES = ("success", "failed")
@@ -186,12 +188,17 @@ def parse_timestamp(value: str) -> datetime:
             offset_hour, offset_minute = rest[:2], rest[2:]
         else:
             offset_hour, offset_minute = rest, "0"
-        tzinfo = timezone(sign * timedelta(hours=int(offset_hour), minutes=int(offset_minute)))
+        offset_hours, offset_minutes = int(offset_hour), int(offset_minute)
+        # timedelta normalizes values such as +00:99 instead of rejecting them.
+        if offset_hours > 23 or offset_minutes > 59:
+            raise ValueError("invalid_timestamp")
+        tzinfo = timezone(sign * timedelta(hours=offset_hours, minutes=offset_minutes))
     try:
         parsed = datetime(year, month, day, hour, minute, second, microsecond, tzinfo=tzinfo)
-    except ValueError as exc:
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        # A valid local date can still fall outside datetime's range in UTC.
         raise ValueError("invalid_timestamp") from exc
-    return parsed.astimezone(timezone.utc)
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -287,11 +294,11 @@ def validate_event_object(obj: Mapping[str, object], raw_json: str, source_file:
                 f"event_version must be a JSON integer, got {type(version).__name__}",
             )
         )
-    if version < 1:
+    if not 1 <= version <= MAX_EVENT_VERSION:
         return invalid(
             _fail(
                 "invalid_event_version",
-                "event_version must be a positive integer",
+                f"event_version must be an integer from 1 to {MAX_EVENT_VERSION}",
             )
         )
 
@@ -340,22 +347,21 @@ def validate_event_object(obj: Mapping[str, object], raw_json: str, source_file:
             )
         if "duration_ms" not in obj or duration is None:
             return invalid(_fail("invalid_duration", "scans require a finite nonnegative duration_ms"))
-        if isinstance(duration, bool) or not isinstance(duration, (int, Decimal)):
-            # json parse_float yields Decimal; a plain float is still accepted from callers.
-            if isinstance(duration, float) and math.isfinite(duration):
-                pass
-            else:
-                return invalid(
-                    _fail(
-                        "invalid_duration",
-                        "duration_ms must be a finite nonnegative number",
-                    )
+        if isinstance(duration, bool) or not isinstance(duration, (int, float, Decimal)):
+            return invalid(
+                _fail(
+                    "invalid_duration",
+                    "duration_ms must be a finite nonnegative number",
                 )
-        if isinstance(duration, float) and not math.isfinite(duration):
-            return invalid(_fail("invalid_duration", "duration_ms must be finite"))
-        if duration < 0:
-            return invalid(_fail("invalid_duration", "duration_ms must be nonnegative"))
+            )
         duration_value: Decimal | None = Decimal(str(duration)) if isinstance(duration, float) else Decimal(duration)
+        if not duration_value.is_finite():
+            return invalid(_fail("invalid_duration", "duration_ms must be finite"))
+        if duration_value < 0:
+            return invalid(_fail("invalid_duration", "duration_ms must be nonnegative"))
+        # JSON decimals can be finite but overflow the downstream DoubleType.
+        if not math.isfinite(float(duration_value)):
+            return invalid(_fail("invalid_duration", "duration_ms exceeds the finite double range"))
     else:
         if scan_status is not None:
             return invalid(

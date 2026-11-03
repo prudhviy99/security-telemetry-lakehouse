@@ -1,8 +1,16 @@
-FROM eclipse-temurin:21-jammy
+FROM eclipse-temurin:21-jdk-noble
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv \
+    && apt-get install -y --no-install-recommends python3.12 python3.12-venv \
     && rm -rf /var/lib/apt/lists/*
+
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3.12 -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TELEMETRY_REQUIRE_SPARK_TESTS=1
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
@@ -14,6 +22,8 @@ COPY sql ./sql
 COPY data ./data
 COPY docs ./docs
 
-RUN pip3 install --no-cache-dir -e ".[dev,spark]"
+RUN python -m pip install --no-cache-dir -e ".[dev,spark]" \
+    && python -c "import sys; assert sys.version_info[:2] == (3, 12)" \
+    && java -version
 
-CMD ["pytest", "-q"]
+CMD ["python", "-m", "pytest", "--require-spark-tests", "-q"]

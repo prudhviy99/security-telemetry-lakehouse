@@ -3,4 +3,4 @@ services:
     build: .
     image: security-telemetry-lakehouse
     working_dir: /app
-    command: ["pytest", "-q"]
+    command: ["python", "-m", "pytest", "--require-spark-tests", "-q"]

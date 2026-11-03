@@ -1,6 +1,7 @@
 """Local stand-in for a Lakeflow job definition.
 
-This is configuration for the orchestrator in this repository. It is not a
+This is the local orchestrator outline. The deployable Databricks job is in
+resources/telemetry.job.yml, selected by databricks.yml. It is not a
 recorded Databricks job, and it has no workspace run id.
 """
 
@@ -18,6 +19,8 @@ JOB_DEFINITION = {
         "run has not been executed."
     ),
     "parameters": {
+        "backend": "local",
+        "stream_generation": "v1",
         "catalog": "local",
         "namespace": "security_telemetry_demo",
         "events_path": "data/events.jsonl",
@@ -32,26 +35,26 @@ JOB_DEFINITION = {
         {
             "task_key": "bronze",
             "depends_on": [],
-            "entry": "notebooks/01_bronze.py",
+            "entry": "telemetry.transforms.run_bronze",
             "description": "Append new immutable JSONL lines to bronze_events.",
         },
         {
             "task_key": "silver_dimension",
             "depends_on": ["bronze"],
-            "entry": "notebooks/02_silver.py",
+            "entry": "telemetry.transforms.run_silver + run_dimension",
             "description": "Validate, MERGE the version ledger and current state, publish dim_customer.",
         },
         {
             "task_key": "gold",
             "depends_on": ["silver_dimension"],
-            "entry": "notebooks/03_gold_validate.py",
+            "entry": "telemetry.transforms.run_gold",
             "parameters": {"stage": "gold"},
             "description": "Full rebuild of the three gold marts from READY silver events.",
         },
         {
             "task_key": "validate",
             "depends_on": ["gold"],
-            "entry": "notebooks/03_gold_validate.py",
+            "entry": "telemetry.transforms.run_validation",
             "parameters": {"stage": "validate"},
             "description": "Reconcile grains and rates. Advance the publication marker only on success.",
         },

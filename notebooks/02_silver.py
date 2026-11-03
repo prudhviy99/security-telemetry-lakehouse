@@ -1,30 +1,35 @@
 # Databricks notebook source
-# Silver and the Type 1 customer dimension.
-#
-# Silver reads append-only bronze with its own checkpoint. foreachBatch
-# validates, MERGEs the version ledger, and recomputes current state from
-# every stored version of each touched event id. Duplicate customer ids
-# block dimension publication.
+# Incremental silver reconciliation, followed by the validated Type 1 dimension.
+from telemetry.orchestrator import config_from_env
 
-from __future__ import annotations
+PARAMETER_DEFAULTS = {
+    "backend": "databricks",
+    "catalog": "",
+    "namespace": "",
+    "events_path": "",
+    "customers_path": "",
+    "bronze_checkpoint": "",
+    "silver_checkpoint": "",
+    "stream_generation": "",
+    "job_run_id": "",
+    "use_auto_loader": "true",
+    "force_gold_assertion_failure": "false",
+}
+parameters = {}
+for name, default in PARAMETER_DEFAULTS.items():
+    try:
+        parameters[name] = dbutils.widgets.get(name)
+    except Exception:
+        dbutils.widgets.text(name, default)
+        parameters[name] = dbutils.widgets.get(name)
 
-import sys
-from pathlib import Path
+config = config_from_env(parameters=parameters)
+# The job environment installs telemetry without its Spark extra.
+# Use Databricks' provided Spark session; never initialize local[2] here.
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+from telemetry.transforms import run_dimension, run_silver
 
-from telemetry.orchestrator import config_from_env  # noqa: E402
-from telemetry.spark_session import get_spark  # noqa: E402
-from telemetry.transforms import run_dimension, run_silver  # noqa: E402
-
-
-def main() -> None:
-    config = config_from_env()
-    spark = get_spark(config.warehouse, shuffle_partitions=config.shuffle_partitions)
-    run_silver(spark, config)
-    run_dimension(spark, config)
-
-
-if __name__ == "__main__":
-    main()
+run_silver(spark, config)
+run_dimension(spark, config)
+print("SILVER_DIMENSION_COMPLETED", config.job_run_id)

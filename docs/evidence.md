@@ -1,188 +1,163 @@
-# Evidence
+# Validation evidence
 
-Local Spark and Delta run of the security telemetry lakehouse. No Databricks workspace was available, so nothing below is a Databricks job run, notebook run, or Unity Catalog grant. There are no secrets in this file.
+Baseline: [`e4ba9244666ac6dd67d83866b5084bc0ebd257d8`](https://github.com/prudhviy99/security-telemetry-lakehouse/commit/e4ba9244666ac6dd67d83866b5084bc0ebd257d8).
+Implementation and local verification date: 2026-11-02 UTC.
 
-## Runtime
+## What changed
 
-| Piece | Version |
-| --- | --- |
-| OS | Ubuntu 24.04.5 |
-| Python | 3.12.3 |
-| Java | OpenJDK 21.0.12.1 |
-| PySpark | 4.2.0 |
-| delta-spark | 4.4.1 |
-| pytest | 8.3.5 |
+- Reject duration overflow, signed-64-bit version overflow, malformed timezone offsets, and timestamps outside Python's UTC range.
+- Separate local Delta paths from Unity Catalog managed tables; preserve cloud URI strings and use workspace Spark in native notebooks.
+- Pass notebook parameters explicitly; share one actual job run ID across the four serverless tasks.
+- Persist checkpoint identities and reject unsafe checkpoint reuse/loss; document isolated rebuilds.
+- Correct Docker's Python version and add required-Spark CI plus a container integration smoke.
+- Resolve local warehouse paths before Ivy startup and align Python/worker timestamp conversion with UTC.
+- Add a deployable bundle and real, opt-in workspace acceptance runner.
 
-`configure_spark_with_delta_pip` resolved `io.delta:delta-spark_4.2_2.13:4.4.1` from Maven Central on the first Spark submit. Later submits reused the Ivy cache.
+## Current local verification
 
-Docker Compose is defined in `docker-compose.yml` and pins the same Python, Java, PySpark, and Delta versions. `docker` is not installed in the environment that produced this file, so `docker compose run` was not executed. The commands below are the pinned local install.
+Python 3.12.14, Java Temurin 21.0.11, PySpark 4.2.0, delta-spark 4.4.1,
+pytest 8.3.5 on macOS arm64. The local venv is isolated from system Python.
 
-## Commands
+The local Spark startup smoke produced:
+
+```text
+SPARK_SMOKE 4.2.0 3
+```
+
+The default Ivy download path could not use this session's JVM network setup.
+The two official Maven Central Delta JARs were downloaded through the inherited
+HTTP proxy and loaded directly on the local JVM classpath using
+`TELEMETRY_DELTA_JARS`. Java/Python dependencies and Spark/Delta versions are the
+same pins as CI. No cloud APIs or managed Databricks runtime were substituted.
 
 ```bash
-python3 -m telemetry.generate --scenario reference --out-dir data
-wc -l -c data/events.jsonl data/customers.jsonl
-python3 -m pytest -q --tb=line
-python3 -m telemetry.orchestrator \
-  --events data/events.jsonl \
-  --customers data/customers.jsonl \
-  --warehouse /tmp/stl-evidence/warehouse \
-  --namespace security_telemetry_demo \
-  --job-run-id local-evidence-reference \
-  --bronze-checkpoint /tmp/stl-evidence/checkpoints/bronze \
-  --silver-checkpoint /tmp/stl-evidence/checkpoints/silver
-python3 -m telemetry.generate --scenario volume --out-dir /tmp/telemetry-volume
-python3 -m telemetry.measure \
-  --events /tmp/telemetry-volume/landing \
-  --customers /tmp/telemetry-volume/customers.jsonl \
-  --warehouse /tmp/telemetry-measure/warehouse \
-  --namespace security_telemetry_measure
+python -m pytest -m 'not spark' -q --junitxml=validation/lightweight.xml
+python -m pytest -m spark --require-spark-tests -vv --junitxml=validation/spark.xml
 ```
 
-`local-evidence-reference` is an id chosen for this local orchestrator run. It is not a Databricks run id.
+The final local result is **45 lightweight tests passed** plus **15 Spark/Delta
+integration tests passed** (22m 51.76s), with no skips in the integration run.
+Machine-readable results are in [validation-2026-11-02.json](validation-2026-11-02.json). The tests include all 13 original Spark cases plus numeric and
+timestamp quarantine and unsafe checkpoint reset / isolated reference rebuild.
+The reference assertions cover 105 raw occurrences, 102 valid, 3 invalid,
+101 ledger versions, 100 READY events, and reconciliation of all three gold marts.
 
-## Fixture
+Additional checks: Python compilation, wheel build, notebook parameter/dispatch
+checks, required-Spark skip-gate checks, and Docker Compose configuration parsing.
+The Databricks CLI used for static schema inspection is v1.23.0. Static validation
+is not a successful workspace deployment.
 
-```text
-  105 28048 data/events.jsonl
-   12  2028 data/customers.jsonl
-```
+## CI evidence
 
-Reference scenario seed `20261101`. 105 raw lines, 12 customers. The three invalid lines are a missing `event_id`, event type `reboot`, and an `event_ts` ten minutes ahead of `received_ts`.
+The original [Actions run](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41385029569)
+reported **26 passed, 1 skipped**, because it installed only dependency-light
+extras. The original author's **39 passed** report is preserved separately in
+[historical evidence](evidence-original.md); those are different evidence sources.
 
-## Tests
+The updated workflow runs independent lightweight, Spark, and Docker smoke jobs, with Java 21
+and Python 3.12. The Spark job explicitly requires integration execution and fails
+if the selected tests skip. Logs and JUnit reports are uploaded per commit.
+[CI run 41389013563](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41389013563)
+completed successfully on implementation commit
+`e5b758bd04b7b8c3194c415a63ea69874419f8b7`:
 
-```text
-python3 -m pytest -q --tb=line
-.......................................                                  [100%]
-39 passed in 1244.71s (0:20:44)
-EXIT:0
-```
+| Job | Measured result |
+| --- | --- |
+| Lightweight | 45 passed; 1 Spark module skipped because this job omits Spark dependencies. |
+| Required Spark integration | 15 passed, no skipped integration tests; 1809.39 seconds. |
+| Docker build and integration smoke | Image build passed; selected Spark/Delta test passed in 94.37 seconds. |
 
-26 of those tests do not start Spark. 13 are Spark/Delta tests (`tests/test_spark_e2e.py`), including MERGE, checkpoints, late events, and the publication marker. GitHub Actions runs `pytest -m "not spark"` only.
+The final follow-up commit changes documentation only and uses `[skip ci]` to
+avoid rerunning unchanged executable/test/build files. The linked run and JSON
+identify the exact code commit that was executed. The draft PR is
+[PR #1](https://github.com/prudhviy99/security-telemetry-lakehouse/pull/1).
 
-One earlier Spark run failed while reading the `silver_events` view as a Delta path. The helper was changed to read the catalog view. `test_matrix_08_duplicate_customer_blocks_and_unknown_stays` then passed alone (`1 passed in 106.44s`), and the full 39-test run above is after that fix.
+## Still requires external execution
 
-## Reference pipeline
+- A Databricks workspace identity and OAuth login; no profile was available in this session.
+- Bundle validate/deploy/run against that workspace, real Auto Loader ingestion,
+  managed-table MERGEs, persistent checkpoints, and all cloud acceptance checks.
+- Actual Lakeflow job/run IDs, measured cloud counts, and the cloud result JSON.
+- Unity Catalog permissions verification; a second-principal denial test remains
+  explicitly untested if the account cannot supply another identity.
 
-Orchestrator exit code 0. Startup printed Ivy resolution and `NativeCodeLoader` / log4j warnings. The measured summary line was:
+The local Docker daemon is unavailable to this session. The image was instead
+built and run by the Docker smoke job on GitHub Actions; its recorded outcome
+is included in the validation JSON and linked CI run.
 
-```text
-PIPELINE_SUMMARY {"conflict_events": 0, "duplicate_delivery_rows": 1, "invalid_rows": 3, "job_run_id": "local-evidence-reference", "ledger_versions": 101, "namespace": "security_telemetry_demo", "publication_rows": 1, "quarantine_rows": 3, "raw_rows": 105, "ready_events": 100, "superseded_versions": 1, "valid_rows": 102}
-```
+No Databricks result, deployment, permission grant, throughput improvement, or
+production-scale claim is made. The project collects small batches and touched
+version histories on the driver, and rebuilds gold tables independently.
 
-Valid occurrences (102) plus invalid occurrences (3) equal raw bronze rows (105). READY events are 100. The two extra valid occurrences are one repeated delivery and one superseded version. They are not conflicts.
 
-Quarantine reasons from `quarantine_events`:
+## Follow-up verification and workspace handoff
 
-```text
-+-------------------------------+-----+
-|quality_reason                 |count|
-+-------------------------------+-----+
-|event_ts_ahead_of_received_ts  |1    |
-|missing_required_field:event_id|1    |
-|unsupported_event_type         |1    |
-+-------------------------------+-----+
-```
+On November 1, 2026 Pacific (November 2 UTC), the existing GitHub Actions jobs
+were inspected directly: `contract-tests`, `spark-tests`, and `docker-smoke`
+all reported `success`. Comparing the implementation commit with PR head
+`62791c6` confirmed that only `docs/databricks.md`, `docs/evidence.md`, and the
+validation JSON changed after the tested executable code.
 
-`event-0010` was ingested as `2026-06-02T03:30:00+05:00` and stored as UTC `2026-06-01 22:30:00`, state `READY`. The unknown customer landed in the cohort mart as `UNKNOWN` / `UNKNOWN` with `accepted_event_count` 1.
+The signed-in Free Edition workspace was reached. Its console displayed:
+"Automated browser control detected. The Databricks console doesn't support
+automated browser control. Continue manually, or connect your agent through
+Genie One MCP." No Databricks connector or authenticated CLI profile was
+available in the follow-up session. Consequently no schema, volume, grant,
+job deployment, or workspace run is claimed from that session. The README now
+links the existing completion branch and the supported OAuth/CLI setup path.
 
-Gold sums of `accepted_event_count` were 100 on `gold_device_day`, `gold_product_version_day`, and `gold_signup_cohort_day`, matching 100 READY events.
+This follow-up changes documentation only. Existing measured test totals remain
+attributed to the linked implementation CI run; they are not new cloud results.
 
-Publication marker (one row, reconciliation `passed`):
 
-```text
-publication_id           local-evidence-reference
-namespace                security_telemetry_demo
-published_at             2026-11-02 00:43:38.664524
-ready_event_count        100
-device_day_event_sum     100
-product_version_event_sum 100
-cohort_event_sum         100
-reconciliation           passed
-```
+## Supported terminal deployment helper
 
-## Failure injection and assertion failure
+The CLI is now installed (v1.23.0), and a `TELEMETRY` profile points to the workspace. In the follow-up agent session, `current-user me`, profile validation, and bundle validation report `no cached credentials`; `auth describe` identifies secure OS-keyring storage. A direct request to the workspace's public OAuth discovery URL also fails with `Could not resolve host`. These observations do not establish that the user's normal-terminal login failed; they establish that this agent environment cannot execute authenticated workspace operations.
 
-Both are Spark tests in the 39 passed run, not a second hand-written log.
+`scripts/deploy_databricks.py` provides a supported normal-terminal handoff without exporting tokens or changing credential storage. It performs catalog selection, dedicated schema/managed-volume setup, byte-verified immutable uploads, bundle build/deploy, reference/no-op runs, and cloud acceptance. Extended recovery checks are opt-in. It writes actual CLI output and a source/input summary, while leaving measured cloud counts to the acceptance report.
 
-- `test_matrix_06_failure_after_each_sink_recovers` raises after `classification`, `quarantine_invalid`, `ledger`, `current`, `quarantine_conflict`, and `audit`, then resumes with the same silver checkpoint. Ledger, current state, quarantine, and gold matched an uninterrupted run of the same input.
-- `test_matrix_12_failed_gold_assertion_does_not_advance_marker` publishes once (`publication_id` `publish-ok`), then reruns with the forced gold assertion. The marker stays `publish-ok`.
+Six dependency-free tests passed with `python3 -m unittest tests.test_deploy_helper -v`. They cover actual-response catalog selection, rejection of an invented catalog, unchanged replay parameters, immutable-file reuse, mismatched-input rejection, and propagation of a remote-read failure. Help output, Python syntax, and whitespace checks passed. No new Spark or Databricks execution is claimed for this helper change; pipeline/runtime/container sources remain the versions covered by the earlier CI evidence.
 
-Duplicate customer ids block publication and do not write `gold_device_day` (`test_matrix_08`). A higher version after a `CONFLICT` becomes `READY` (`test_matrix_05`). Identical files with the same checkpoints do not change bronze, the ledger, current state, quarantine, or gold (`test_matrix_01`).
 
-## Larger local run
+## First real workspace run: serverless refresh failure
 
-`scenarios/volume.json`: seed `20261101`, 10,000 logical events, 200 customers, 4 JSONL files, 2,674,008 bytes. No invalid rows, so READY count equals raw count. Cold time includes JVM startup in that process. The warm rerun uses the same checkpoints.
+The normal-terminal helper log `databricks-deploy-20261103T045515Z.log` and its
+JSON summary record successful bundle validation and deployment: both jobs were
+created and 48 bundle files were uploaded. The selected catalog is `workspace`,
+with the dedicated `security_telemetry_demo` schema. The helper recorded input
+SHA-256 values `442b9499cc4b4943118990866e07df3263bff57a45bd59c9dce654372b647c01`
+(events) and `177c90ebb0fe3c0f2114c8175b83e2c5eb62ead9a6d4569d6bdb33feac113a9c`
+(customers), and local source commit `51b4d59` with no tracked modifications.
 
-```text
-input_rows: 10000
-input_bytes: 2674008
-file_count: 4
-pure_ready_events: 10000
-spark_ready_events: 10000
-ready_matches_contract: True
-cold_pipeline_seconds: 73.928
-warm_rerun_seconds: 28.756
-warm_rerun_ready_events: 10000
-gold_rebuild_shuffle_1_seconds: 2.711
-gold_rebuild_shuffle_8_seconds: 8.874
-```
+[Pipeline run 837260759008916](https://dbc-03193c06-bea4.cloud.databricks.com/jobs/475857202225789/runs/837260759008916?o=7474656704611080)
+started on November 2, 2026 at 20:55 Pacific and failed at 20:59 in `silver`.
+The exception was `NOT_SUPPORTED_WITH_SERVERLESS: REFRESH TABLE is not supported
+on serverless compute` from `run_dimension`, after writing the customer snapshot.
+Gold and validation tasks were skipped. Replay and acceptance commands were not
+reached. No successful cloud publication or final reference metrics are claimed.
 
-The single change was `spark.sql.shuffle.partitions` on a warm gold rebuild, from 1 to 8. Eight partitions was slower on this machine for this data. No throughput target or improvement is claimed.
+Version 0.1.1 restricts both dimension and gold `REFRESH TABLE` calls to the local
+backend and pins both job dependencies to the new wheel filename. Three narrow
+write-stage regressions pass, together with six deployment-helper tests. Running
+the same regressions against the pre-fix source reproduces both unsupported
+serverless refresh failures. These are dependency-free boundary tests; they do
+not substitute for the pending workspace retry or full Spark execution of the fix.
+The existing schema, source files, stream generation, and checkpoints are retained.
 
-Physical plan at 1 shuffle partition:
 
-```text
-== Physical Plan ==
-*(2) HashAggregate(keys=[event_date#36521, customer_id#36535, device_id#36536], functions=[count(1)])
-+- Exchange hashpartitioning(event_date#36521, customer_id#36535, device_id#36536, 1), ENSURE_REQUIREMENTS, [plan_id=8676]
-   +- *(1) HashAggregate(keys=[event_date#36521, customer_id#36535, device_id#36536], functions=[partial_count(1)])
-      +- *(1) Project [cast(event_ts#36534 as date) AS event_date#36521, customer_id#36535, device_id#36536]
-         +- *(1) Filter (isnotnull(state#36530) AND (state#36530 = READY))
-            +- *(1) ColumnarToRow
-               +- FileScan parquet spark_catalog.security_telemetry_measure.silver_current[state#36530,event_ts#36534,customer_id#36535,device_id#36536] Batched: true, DataFilters: [isnotnull(state#36530), (state#36530 = READY)], Format: Parquet, Location: PreparedDeltaFileIndex(1 paths)[file:/tmp/telemetry-measure/warehouse/security_telemetry_measure/..., PartitionFilters: [], PushedFilters: [IsNotNull(state), EqualTo(state,READY)], ReadSchema: struct<state:string,event_ts:timestamp,customer_id:string,device_id:string>
-```
+## Successful 0.1.1 pipeline and basic acceptance; extended harness failure
 
-The 8-partition plan is the same shape with `hashpartitioning(..., 8)`.
+The same helper log/summary `databricks-deploy-20261103T055620Z` records:
 
-After the measure process printed that summary it exited 0. Stderr also showed `BrokenPipeError` from a PySpark worker during shutdown. The counts above were printed before that.
+| Run | Result | Pacific time / duration |
+| --- | --- | --- |
+| Pipeline `673561808875428` | SUCCESS | Nov 2, 21:56:40–21:59:46; 3m 6s |
+| Pipeline rerun `629043682032596` | SUCCESS | Nov 2, 21:59:50–22:02:26; 2m 36s |
+| Basic acceptance `363703603959324` | SUCCESS | Nov 2, 22:02:29–22:14:10; 11m 41s |
+| Extended acceptance `143069489210937` | FAILED | Nov 2, 22:14:12–22:59:18; 45m 6s |
 
-## Local job export
+The extended error trace contains the deliberately injected failure at each of `classification`, `quarantine_invalid`, `ledger`, `current`, `quarantine_conflict`, and `audit`. Subsequent notebook attempts report `Acceptance namespace already exists`. These are observed errors; a complete extended pass is not claimed. The basic job's measured JSON has not yet been downloaded into the repository by the agent.
 
-This is the orchestrator task list. `databricks_job_id` is null on purpose.
+All three [CI jobs for the 0.1.1 fix](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41585455038) completed successfully. Version 0.1.2 leaves the pipeline transformations unchanged and adjusts acceptance orchestration/reporting: disable automatic optimization retries, add a separate strict report-verification leaf, retain attempt reports, collect real Jobs API/report evidence, and resume verified prior successes.
 
-```json
-{
-  "name": "security_telemetry_daily",
-  "format": "local-lakeflow-equivalent",
-  "max_concurrent_runs": 1,
-  "trigger": "availableNow",
-  "databricks_job_id": null,
-  "parameters": {
-    "catalog": "local",
-    "namespace": "security_telemetry_demo",
-    "events_path": "data/events.jsonl",
-    "customers_path": "data/customers.jsonl",
-    "warehouse_path": "warehouse",
-    "bronze_checkpoint": "checkpoints/bronze",
-    "silver_checkpoint": "checkpoints/silver",
-    "use_auto_loader": false,
-    "source": "spark structured streaming text files with Trigger.AvailableNow"
-  },
-  "tasks": [
-    {"task_key": "bronze", "depends_on": [], "entry": "notebooks/01_bronze.py"},
-    {"task_key": "silver_dimension", "depends_on": ["bronze"], "entry": "notebooks/02_silver.py"},
-    {"task_key": "gold", "depends_on": ["silver_dimension"], "entry": "notebooks/03_gold_validate.py", "parameters": {"stage": "gold"}},
-    {"task_key": "validate", "depends_on": ["gold"], "entry": "notebooks/03_gold_validate.py", "parameters": {"stage": "validate"}}
-  ]
-}
-```
-
-## Not executed
-
-- Databricks workspace, Lakeflow job submission, and any Databricks run id
-- Auto Loader (`cloudFiles`). Local bronze uses the text file source and `Trigger.AvailableNow`
-- Unity Catalog volumes, grants, and a second read-only principal
-- `docker compose run` (Docker is not installed here)
-- Spec section 9 anomaly / modeling extension
+Twenty-three dependency-free tests pass for the write boundary, deployment safeguards, exact report verification, expected-vs-unexpected task failures, and resume execution. A direct source comparison against the recorded clean `d7e443d` checkout confirms that the pipeline inputs/code are eligible for resume (versioned wheel references are normalized). The 0.1.2 workspace retry remains pending. Unit tests and static schema checks do not establish that the new cloud job has run.

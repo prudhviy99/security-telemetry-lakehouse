@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "security-telemetry-lakehouse"
-version = "0.1.0"
+version = "0.1.2"
 description = "Local Spark and Delta lakehouse for synthetic endpoint security telemetry."
 readme = "README.md"
 requires-python = ">=3.11"

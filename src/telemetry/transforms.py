@@ -11,6 +11,7 @@ the three gold tables.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -27,7 +28,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from telemetry.config import PipelineConfig
+from telemetry.config import PipelineConfig, comparable_storage_path, join_storage_path
 from telemetry.contracts import (
     UNKNOWN_SEGMENT,
     CanonicalEvent,
@@ -153,6 +154,22 @@ PUBLICATION_SCHEMA = StructType(
     ]
 )
 
+STREAM_STATE_SCHEMA = StructType(
+    [
+        StructField("stream_kind", StringType(), False),
+        StructField("stream_identity", StringType(), False),
+        StructField("stream_generation", StringType(), False),
+        StructField("checkpoint_location", StringType(), False),
+        StructField("checkpoint_id", StringType(), True),
+        StructField("created_at", TimestampType(), False),
+    ]
+)
+
+
+class UnsafeCheckpointReset(RuntimeError):
+    """A checkpoint or stream identity changed while retaining its target data."""
+
+
 SINK_ORDER = (
     "classification",
     "quarantine_invalid",
@@ -218,20 +235,21 @@ def _location(path: Path) -> str:
     return path.resolve().as_posix().replace("'", "")
 
 
-def _checkpoint_is_outside_input(checkpoint: Path, landing: Path) -> None:
-    checkpoint_resolved = checkpoint.resolve()
-    landing_resolved = landing.resolve()
-    if checkpoint_resolved == landing_resolved or landing_resolved in checkpoint_resolved.parents:
-        raise RuntimeError(
-            f"checkpoint {checkpoint_resolved} must be outside the input directory {landing_resolved}"
-        )
+def _checkpoint_is_outside_input(checkpoint: str | Path, landing: str | Path) -> None:
+    def canonical(value: str | Path) -> str:
+        if isinstance(value, Path):
+            return value.resolve().as_posix().rstrip("/")
+        return comparable_storage_path(value)
+    checkpoint_value, landing_value = canonical(checkpoint), canonical(landing)
+    if checkpoint_value == landing_value or checkpoint_value.startswith(landing_value + "/"):
+        raise RuntimeError(f"checkpoint {checkpoint_value} must be outside the input directory {landing_value}")
 
 
 def ensure_database(spark: SparkSession, config: PipelineConfig) -> None:
-    if config.catalog in {"local", "spark_catalog"}:
-        spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.namespace}")
+    if config.backend == "databricks":
+        spark.sql(f"CREATE SCHEMA IF NOT EXISTS {config.catalog}.{config.namespace}")
     else:
-        spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.catalog}.{config.namespace}")
+        spark.sql(f"CREATE DATABASE IF NOT EXISTS {config.namespace}")
 
 
 def ensure_table(
@@ -243,14 +261,113 @@ def ensure_table(
     append_only: bool = False,
 ) -> None:
     ensure_database(spark, config)
+    qualified = config.qualified(table)
+    if config.backend == "databricks":
+        if not spark.catalog.tableExists(qualified):
+            spark.createDataFrame([], schema).write.format("delta").saveAsTable(qualified)
+        return
     path = config.table_path(table)
     path.parent.mkdir(parents=True, exist_ok=True)
-    qualified = config.qualified(table)
     if not DeltaTable.isDeltaTable(spark, str(path)):
-        # Bronze is a streaming source, so its history must be append-only.
         mode = "append" if append_only else "overwrite"
         spark.createDataFrame([], schema).write.format("delta").mode(mode).save(str(path))
     spark.sql(f"CREATE TABLE IF NOT EXISTS {qualified} USING DELTA LOCATION '{_location(path)}'")
+
+
+def _delta_table(spark: SparkSession, config: PipelineConfig, table: str):
+    if config.backend == "databricks":
+        return DeltaTable.forName(spark, config.qualified(table))
+    return DeltaTable.forPath(spark, str(config.table_path(table)))
+
+
+def _save_frame(frame: DataFrame, config: PipelineConfig, table: str, mode: str, **options) -> None:
+    writer = frame.write.format("delta").mode(mode)
+    for key, value in options.items():
+        writer = writer.option(key, value)
+    if config.backend == "databricks":
+        writer.saveAsTable(config.qualified(table))
+    else:
+        writer.save(str(config.table_path(table)))
+
+
+def _checkpoint_metadata(spark: SparkSession, config: PipelineConfig, kind: str) -> str | None:
+    path = join_storage_path(getattr(config, f"{kind}_checkpoint"), "metadata")
+    if config.backend == "local":
+        file = Path(path)
+        if not file.exists():
+            return None
+        raw = file.read_text(encoding="utf-8")
+    else:
+        try:
+            raw = "".join(row.value for row in spark.read.text(path).collect())
+        except Exception as exc:
+            condition = getattr(exc, "getCondition", lambda: None)()
+            if condition is None:
+                condition = getattr(exc, "getErrorClass", lambda: None)()
+            if condition and ("PATH_NOT_FOUND" in condition or "FILE_NOT_EXIST" in condition):
+                return None
+            raise RuntimeError(f"Cannot inspect {kind} checkpoint metadata at {path}; verify storage access") from exc
+    try:
+        identifier = json.loads(raw)["id"]
+        if not isinstance(identifier, str) or not identifier:
+            raise ValueError("empty checkpoint id")
+        return identifier
+    except (ValueError, KeyError, TypeError) as exc:
+        raise UnsafeCheckpointReset(f"{kind} checkpoint metadata is invalid at {path}") from exc
+
+
+def _guard_stream(spark: SparkSession, config: PipelineConfig, kind: str) -> None:
+    """Refuse checkpoint deletion/replacement or identity reuse against existing state.
+
+    Rebuilds use a fresh namespace, stream generation, and empty checkpoint
+    directories. This avoids reusing Delta transaction versions or silently
+    skipping files from another target's checkpoint.
+    """
+    state = spark.table(config.qualified("pipeline_stream_state")).where(F.col("stream_kind") == kind).collect()
+    metadata_id = _checkpoint_metadata(spark, config, kind)
+    identity = config.stream_identity(kind)
+    location = config.canonical_checkpoint(kind)
+    evidence_table = "bronze_events" if kind == "bronze" else "bronze_row_classification"
+    has_output = bool(spark.table(config.qualified(evidence_table)).limit(1).count())
+    reason = None
+    if state:
+        row = state[0]
+        if row.stream_identity != identity or row.stream_generation != config.stream_generation or row.checkpoint_location != location:
+            reason = "configured identity, generation, or checkpoint path changed"
+        elif row.checkpoint_id is not None and metadata_id != row.checkpoint_id:
+            reason = "checkpoint metadata was deleted or replaced"
+        elif metadata_id is None and has_output:
+            reason = "target data exists but its checkpoint is missing"
+    elif metadata_id is not None or has_output:
+        reason = "unregistered existing checkpoint or target data cannot be adopted automatically"
+    if reason:
+        raise UnsafeCheckpointReset(
+            f"Unsafe {kind} checkpoint reset: {reason}. Resume the original checkpoint, "
+            "or rebuild into a NEW namespace, stream_generation, and empty checkpoint directories."
+        )
+    if not state:
+        row = {"stream_kind": kind, "stream_identity": identity,
+               "stream_generation": config.stream_generation, "checkpoint_location": location,
+               "checkpoint_id": None, "created_at": _utcnow()}
+        _merge(spark, config, "pipeline_stream_state", _frame(spark, [row], STREAM_STATE_SCHEMA), ["stream_kind"], None)
+
+
+def _record_checkpoint(spark: SparkSession, config: PipelineConfig, kind: str) -> None:
+    """Persist the checkpoint UUID before a callback commits any output."""
+    identifier = _checkpoint_metadata(spark, config, kind)
+    if identifier is None:
+        raise UnsafeCheckpointReset(f"{kind} stream started without persistent checkpoint metadata")
+    rows = spark.table(config.qualified("pipeline_stream_state")).where(F.col("stream_kind") == kind).collect()
+    if len(rows) != 1:
+        raise UnsafeCheckpointReset(f"{kind} stream has no unique registry entry")
+    stored = rows[0].checkpoint_id
+    if stored is not None and stored != identifier:
+        raise UnsafeCheckpointReset(f"{kind} checkpoint identity changed during execution")
+    if stored is None:
+        _delta_table(spark, config, "pipeline_stream_state").update(
+            condition=(F.col("stream_kind") == kind) & F.col("checkpoint_id").isNull(),
+            set={"checkpoint_id": F.lit(identifier)},
+        )
 
 
 def _frame(spark: SparkSession, rows: list[dict], schema: StructType) -> DataFrame:
@@ -263,7 +380,7 @@ def _merge(spark: SparkSession, config: PipelineConfig, table: str, frame: DataF
     if frame.limit(1).count() == 0:
         return
     deduped = frame.dropDuplicates(keys)
-    target = DeltaTable.forPath(spark, str(config.table_path(table)))
+    target = _delta_table(spark, config, table)
     condition = " AND ".join(f"target.{key} = source.{key}" for key in keys)
     builder = target.alias("target").merge(deduped.alias("source"), condition)
     if matched_update is None:
@@ -354,6 +471,9 @@ def refresh_silver_events(spark: SparkSession, config: PipelineConfig) -> None:
 
 
 def _prepare_tables(spark: SparkSession, config: PipelineConfig) -> None:
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
+    if config.backend == "local":
+        spark.conf.set("spark.sql.shuffle.partitions", str(config.shuffle_partitions))
     ensure_table(spark, config, "bronze_events", BRONZE_SCHEMA, append_only=True)
     ensure_table(spark, config, "bronze_row_classification", CLASSIFICATION_SCHEMA)
     ensure_table(spark, config, "quarantine_events", QUARANTINE_SCHEMA)
@@ -362,6 +482,7 @@ def _prepare_tables(spark: SparkSession, config: PipelineConfig) -> None:
     ensure_table(spark, config, "dim_customer", CUSTOMER_SCHEMA)
     ensure_table(spark, config, "pipeline_run_audit", AUDIT_SCHEMA)
     ensure_table(spark, config, "successful_publication", PUBLICATION_SCHEMA)
+    ensure_table(spark, config, "pipeline_stream_state", STREAM_STATE_SCHEMA)
     refresh_silver_events(spark, config)
 
 
@@ -392,12 +513,13 @@ def run_bronze(spark: SparkSession, config: PipelineConfig) -> None:
     _checkpoint_is_outside_input(config.bronze_checkpoint, landing)
     _prepare_tables(spark, config)
     plan = _plan(config)
+    _guard_stream(spark, config, "bronze")
     if config.use_auto_loader:
         # Databricks Auto Loader path. Not used by the recorded local runs.
         reader = (
             spark.readStream.format("cloudFiles")
             .option("cloudFiles.format", "text")
-            .option("cloudFiles.schemaLocation", str(config.bronze_checkpoint / "schema"))
+            .option("cloudFiles.schemaLocation", join_storage_path(config.bronze_checkpoint, "schema"))
         )
     else:
         reader = spark.readStream.format("text")
@@ -408,6 +530,8 @@ def run_bronze(spark: SparkSession, config: PipelineConfig) -> None:
     )
 
     def handle(batch: DataFrame, batch_id: int) -> None:
+        spark = batch.sparkSession
+        _record_checkpoint(spark, config, "bronze")
         if batch.limit(1).count() == 0:
             return
         loaded_at = _utcnow()
@@ -418,27 +542,24 @@ def run_bronze(spark: SparkSession, config: PipelineConfig) -> None:
             key = (row.source_file or "", row.raw_json)
             occurrence = seen.get(key, 0)
             seen[key] = occurrence + 1
-            identity = f"{config.bronze_stream_id}|{batch_id}|{key[0]}|{occurrence}|{row.raw_json}"
+            identity = f"{config.stream_identity('bronze')}|{batch_id}|{key[0]}|{occurrence}|{row.raw_json}"
             payload.append(
                 {
                     "bronze_row_id": raw_payload_hash(identity),
                     "raw_json": row.raw_json,
                     "source_file": row.source_file,
                     "loaded_at": loaded_at,
-                    "stream_id": config.bronze_stream_id,
+                    "stream_id": config.stream_identity("bronze"),
                     "batch_id": int(batch_id),
                 }
             )
         frame = _frame(spark, payload, BRONZE_SCHEMA)
-        (
-            frame.write.format("delta")
-            .mode("append")
-            .option("txnAppId", config.bronze_stream_id)
-            .option("txnVersion", str(batch_id))
-            .save(str(config.table_path("bronze_events")))
-        )
+        _save_frame(frame, config, "bronze_events", "append",
+                    txnAppId=config.stream_identity("bronze"), txnVersion=str(batch_id))
 
-    config.bronze_checkpoint.mkdir(parents=True, exist_ok=True)
+    if config.backend == "local":
+        config.bronze_checkpoint.mkdir(parents=True, exist_ok=True)
+
     query = (
         source.writeStream.foreachBatch(handle)
         .option("checkpointLocation", str(config.bronze_checkpoint))
@@ -447,6 +568,7 @@ def run_bronze(spark: SparkSession, config: PipelineConfig) -> None:
         .start()
     )
     _await_query(query, plan)
+    _record_checkpoint(spark, config, "bronze")
 
 
 def apply_silver_batch(spark: SparkSession, config: PipelineConfig, batch: DataFrame, batch_id: int) -> None:
@@ -460,7 +582,7 @@ def apply_silver_batch(spark: SparkSession, config: PipelineConfig, batch: DataF
         return
     collected = batch.select("bronze_row_id", "raw_json", "source_file").collect()
     classified = [(row, classify_raw_line(row.raw_json, row.source_file)) for row in collected]
-    run_id = f"{config.silver_stream_id}:{batch_id}"
+    run_id = f"{config.stream_identity('silver')}:{batch_id}"
     now = _utcnow()
 
     class_rows = []
@@ -520,7 +642,7 @@ def apply_silver_batch(spark: SparkSession, config: PipelineConfig, batch: DataF
     deduped = dedupe_versions(valid_events)
     if deduped:
         version_frame = _frame(spark, [_event_to_version_row(event) for event in deduped], VERSION_SCHEMA)
-        target = DeltaTable.forPath(spark, str(config.table_path("silver_event_versions")))
+        target = _delta_table(spark, config, "silver_event_versions")
         (
             target.alias("target")
             .merge(
@@ -546,8 +668,7 @@ def apply_silver_batch(spark: SparkSession, config: PipelineConfig, batch: DataF
     if touched:
         id_frame = spark.createDataFrame([(event_id,) for event_id in touched], ["event_id"])
         stored_rows = (
-            spark.read.format("delta")
-            .load(str(config.table_path("silver_event_versions")))
+            spark.table(config.qualified("silver_event_versions"))
             .join(F.broadcast(id_frame), "event_id", "inner")
             .collect()
         )
@@ -555,7 +676,7 @@ def apply_silver_batch(spark: SparkSession, config: PipelineConfig, batch: DataF
         states = current_states(stored)
         current_frame = _frame(spark, [_state_to_row(state) for state in states], CURRENT_SCHEMA)
         (
-            DeltaTable.forPath(spark, str(config.table_path("silver_current")))
+            _delta_table(spark, config, "silver_current")
             .alias("target")
             .merge(current_frame.dropDuplicates(["event_id"]).alias("source"), "target.event_id = source.event_id")
             .whenMatchedUpdateAll()
@@ -598,7 +719,7 @@ def apply_silver_batch(spark: SparkSession, config: PipelineConfig, batch: DataF
             elif state["state"] == "CONFLICT":
                 conflict_touched += 1
     audit_row = {
-        "stream_id": config.silver_stream_id,
+        "stream_id": config.stream_identity("silver"),
         "batch_id": str(batch_id),
         "run_kind": "ingestion_batch",
         "status": "COMPLETED",
@@ -631,16 +752,19 @@ def run_silver(spark: SparkSession, config: PipelineConfig) -> None:
     _checkpoint_is_outside_input(config.silver_checkpoint, landing)
     _prepare_tables(spark, config)
     plan = _plan(config)
+    _guard_stream(spark, config, "silver")
     source = (
         spark.readStream.format("delta")
         .option("startingVersion", "0")
         .option("ignoreDeletes", "true")
-        .load(str(config.table_path("bronze_events")))
+        .table(config.qualified("bronze_events"))
     )
-    config.silver_checkpoint.mkdir(parents=True, exist_ok=True)
+    if config.backend == "local":
+        config.silver_checkpoint.mkdir(parents=True, exist_ok=True)
 
     def handle(batch: DataFrame, batch_id: int) -> None:
-        apply_silver_batch(spark, config, batch, batch_id)
+        _record_checkpoint(batch.sparkSession, config, "silver")
+        apply_silver_batch(batch.sparkSession, config, batch, batch_id)
 
     query = (
         source.writeStream.foreachBatch(handle)
@@ -650,13 +774,14 @@ def run_silver(spark: SparkSession, config: PipelineConfig) -> None:
         .start()
     )
     _await_query(query, plan)
+    _record_checkpoint(spark, config, "silver")
     refresh_silver_events(spark, config)
 
 
 def run_dimension(spark: SparkSession, config: PipelineConfig) -> None:
     """Replace dim_customer with the validated snapshot, or block publication."""
     _prepare_tables(spark, config)
-    lines = config.customers_path.read_text(encoding="utf-8").splitlines()
+    lines = [row.value for row in spark.read.text(str(config.customers_path)).collect()]
     customers, errors = validate_customer_snapshot(lines)
     if errors or customers is None:
         _write_job_audit(spark, config, "DIMENSION_BLOCKED", {"errors": errors})
@@ -673,10 +798,11 @@ def run_dimension(spark: SparkSession, config: PipelineConfig) -> None:
         }
         for customer in customers
     ]
-    path = config.table_path("dim_customer")
-    _frame(spark, rows, CUSTOMER_SCHEMA).write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(path))
-    spark.sql(f"CREATE TABLE IF NOT EXISTS {config.qualified('dim_customer')} USING DELTA LOCATION '{_location(path)}'")
-    spark.sql(f"REFRESH TABLE {config.qualified('dim_customer')}")
+    _save_frame(_frame(spark, rows, CUSTOMER_SCHEMA), config, "dim_customer", "overwrite", overwriteSchema="true")
+    if config.backend == "local":
+        path = config.table_path("dim_customer")
+        spark.sql(f"CREATE TABLE IF NOT EXISTS {config.qualified('dim_customer')} USING DELTA LOCATION '{_location(path)}'")
+        spark.sql(f"REFRESH TABLE {config.qualified('dim_customer')}")
 
 
 def _gold_select(scan_alias: str = "") -> str:
@@ -702,15 +828,17 @@ def _gold_select(scan_alias: str = "") -> str:
 
 def _overwrite_sql(spark: SparkSession, config: PipelineConfig, table: str, select_sql: str) -> None:
     frame = spark.sql(select_sql)
-    path = config.table_path(table)
-    frame.write.format("delta").mode("overwrite").option("overwriteSchema", "true").save(str(path))
+    _save_frame(frame, config, table, "overwrite", overwriteSchema="true")
     qualified = config.qualified(table)
-    spark.sql(f"CREATE TABLE IF NOT EXISTS {qualified} USING DELTA LOCATION '{_location(path)}'")
-    spark.sql(f"REFRESH TABLE {qualified}")
+    if config.backend == "local":
+        path = config.table_path(table)
+        spark.sql(f"CREATE TABLE IF NOT EXISTS {qualified} USING DELTA LOCATION '{_location(path)}'")
+        spark.sql(f"REFRESH TABLE {qualified}")
 
 
 def run_gold(spark: SparkSession, config: PipelineConfig) -> None:
     """Full rebuild from READY silver events. Historical dates change when late facts arrive."""
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
     refresh_silver_events(spark, config)
     events = config.qualified("silver_events")
     customers = config.qualified("dim_customer")
@@ -836,7 +964,7 @@ def _write_job_audit(spark: SparkSession, config: PipelineConfig, status: str, d
     }
     # Latest job status replaces an earlier failed attempt with the same local run id.
     frame = _frame(spark, [row], AUDIT_SCHEMA)
-    target = DeltaTable.forPath(spark, str(config.table_path("pipeline_run_audit")))
+    target = _delta_table(spark, config, "pipeline_run_audit")
     (
         target.alias("target")
         .merge(
@@ -851,6 +979,7 @@ def _write_job_audit(spark: SparkSession, config: PipelineConfig, status: str, d
 
 def run_validation(spark: SparkSession, config: PipelineConfig) -> list[str]:
     """Reconcile gold, then advance the publication marker only when every assertion passes."""
+    spark.conf.set("spark.sql.session.timeZone", "UTC")
     failures = reconciliation_failures(spark, config)
     quality = quality_counts(spark, config)
     if failures:
@@ -933,8 +1062,10 @@ def quality_counts(spark: SparkSession, config: PipelineConfig) -> dict:
 
 def execute(spark: SparkSession, config: PipelineConfig) -> dict:
     """Bronze, then silver and the dimension, then gold, then validation. One run at a time."""
-    config.warehouse.mkdir(parents=True, exist_ok=True)
-    with SingleRunLock(config.warehouse / "pipeline.lock"):
+    if config.backend == "local":
+        config.warehouse.mkdir(parents=True, exist_ok=True)
+    lock = SingleRunLock(config.warehouse / "pipeline.lock") if config.backend == "local" else nullcontext()
+    with lock:
         run_bronze(spark, config)
         run_silver(spark, config)
         run_dimension(spark, config)

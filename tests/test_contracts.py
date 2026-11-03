@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -12,6 +13,7 @@ import pytest
 
 from telemetry.contracts import (
     InMemoryLake,
+    MAX_EVENT_VERSION,
     canonical_hash_document,
     canonical_payload_hash,
     canonical_timestamp,
@@ -100,6 +102,38 @@ def test_timestamps_require_explicit_zone_and_do_not_use_locale():
     assert ahead_clock == datetime(2026, 6, 1, 22, 30, tzinfo=UTC)
 
 
+def test_event_version_must_fit_the_delta_long_type():
+    maximum = classify_raw_line(_line(event_version=MAX_EVENT_VERSION))
+    assert maximum.status == "valid"
+    assert maximum.event.event_version == 9223372036854775807
+    too_large = classify_raw_line(_line(event_version=MAX_EVENT_VERSION + 1))
+    assert too_large.status == "invalid"
+    assert too_large.event is None
+    assert too_large.quality_reason == "invalid_event_version"
+
+
+def test_invalid_offsets_and_utc_overflow_become_validation_failures():
+    malformed = (
+        "2026-06-01T12:00:00+00:99",
+        "2026-06-01T12:00:00-0060",
+        "2026-06-01T12:00:00+24:00",
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+    )
+    for timestamp in malformed:
+        with pytest.raises(ValueError, match="invalid_timestamp"):
+            parse_timestamp(timestamp)
+        for field in ("event_ts", "received_ts"):
+            row = classify_raw_line(_line(**{field: timestamp}))
+            assert row.status == "invalid"
+            assert row.quality_reason == f"invalid_timestamp:{field}"
+        customers, errors = validate_customer_snapshot([_customer(updated_at=timestamp)])
+        assert customers is None
+        assert errors == ["line 1: invalid_timestamp:updated_at"]
+    # Minutes at the boundary are still accepted and converted to UTC.
+    assert parse_timestamp("2026-06-01T12:00:00+00:59") == datetime(2026, 6, 1, 11, 1, tzinfo=UTC)
+
+
 def test_future_skew_boundary_and_old_events():
     base = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
     exactly = classify_raw_line(
@@ -136,6 +170,21 @@ def test_event_type_and_scan_fields():
     assert leaked.quality_reason == "invalid_scan_status"
     threat = classify_raw_line(_line(event_type="threat_detected", scan_status=None, duration_ms=4))
     assert threat.quality_reason == "invalid_duration"
+
+
+def test_duration_must_remain_finite_in_the_delta_double_type():
+    # Use literal JSON numbers so parsing exercises Decimal, not Python's
+    # float overflow before serialization. Also cover JSON's nonfinite tokens.
+    for literal in ("1e309", "1.7976931348623159e308", "9" * 309, "NaN", "Infinity", "-Infinity"):
+        raw = _line().replace('"duration_ms":10', f'"duration_ms":{literal}')
+        row = classify_raw_line(raw)
+        assert row.status == "invalid", literal
+        assert row.event is None
+        assert row.quality_reason == "invalid_duration"
+    maximum = classify_raw_line(_line(duration_ms=sys.float_info.max))
+    assert maximum.status == "valid"
+    assert math.isfinite(float(maximum.event.duration_ms))
+    assert float(maximum.event.duration_ms) == sys.float_info.max
 
 
 def test_canonical_hash_excludes_receipt_and_optional_attribute():

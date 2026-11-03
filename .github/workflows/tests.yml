@@ -2,17 +2,93 @@ name: tests
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   contract-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - name: Install dependency-light test extras
-        run: pip install -e ".[dev]"
+        run: python -m pip install -e ".[dev]"
       - name: Run contract and mart tests
-        run: pytest -m "not spark" -q
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          python -m pytest -m "not spark" -q --junitxml=test-results/contracts.xml 2>&1 | tee test-results/contracts.log
+      - name: Upload lightweight test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-tests-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Python 3.12 and Java 21 image
+        run: docker build -t telemetry-test .
+      - name: Verify container Spark, Delta, and timestamp handling
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p test-results
+          docker run --rm telemetry-test python -m pytest tests/test_spark_e2e.py::test_matrix_03_same_payload_different_receipt_is_one_version --require-spark-tests -q 2>&1 | tee test-results/docker-smoke.log
+      - name: Upload container test result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-smoke-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn
+
+  spark-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install local Spark and Delta test extras
+        run: python -m pip install -e ".[dev,spark]"
+      - name: Record runtime and source identity
+        shell: bash
+        run: |
+          mkdir -p test-results
+          git rev-parse HEAD > test-results/runtime.txt
+          python --version >> test-results/runtime.txt
+          java -version >> test-results/runtime.txt 2>&1
+          python -m pip show pyspark delta-spark pytest >> test-results/runtime.txt
+      - name: Run required Spark and Delta integration tests
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m pytest -m spark --require-spark-tests -q --junitxml=test-results/spark.xml 2>&1 | tee test-results/spark.log
+      - name: Upload Spark test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-tests-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: warn

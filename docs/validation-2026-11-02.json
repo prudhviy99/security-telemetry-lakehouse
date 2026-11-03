@@ -1,0 +1,82 @@
+{
+  "updated_at": "2026-11-02T05:04:55.700965+00:00",
+  "baseline_commit": "e4ba9244666ac6dd67d83866b5084bc0ebd257d8",
+  "scope": "local verification; Databricks execution pending authentication",
+  "runtime": {
+    "os": "Darwin",
+    "architecture": "arm64",
+    "python": "3.12.14",
+    "java": "Temurin 21.0.11",
+    "pyspark": "4.2.0",
+    "delta-spark": "4.4.1",
+    "pytest": "8.3.5"
+  },
+  "lightweight": {
+    "status": "passed",
+    "tests": 45,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 0.197
+  },
+  "spark_integration": {
+    "status": "passed",
+    "tests": 15,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 1371.759
+  },
+  "static": {
+    "python_compile": "passed",
+    "wheel_build": "passed",
+    "databricks_cli_schema": "passed",
+    "notebook_parameter_dispatch": "passed",
+    "compose_config": "passed"
+  },
+  "cloud": {
+    "status": "not_run",
+    "reason": "No authenticated Databricks workspace profile"
+  },
+  "docker_local": {
+    "status": "not_run",
+    "reason": "Docker daemon unavailable to this session"
+  },
+  "ci": {
+    "status": "passed",
+    "run_url": "https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41389013563",
+    "head_sha": "e5b758bd04b7b8c3194c415a63ea69874419f8b7",
+    "lightweight": {
+      "status": "passed",
+      "tests": 45,
+      "spark_module_skipped": 1,
+      "job_id": 125096084529
+    },
+    "docker_smoke": {
+      "status": "passed",
+      "tests": 1,
+      "seconds": 94.37,
+      "job_id": 125096084573,
+      "image_build": "passed"
+    },
+    "spark_integration": {
+      "status": "passed",
+      "tests": 15,
+      "failures": 0,
+      "skipped": 0,
+      "seconds": 1809.39,
+      "job_id": 125096084311
+    }
+  },
+  "implementation_commit": "e5b758bd04b7b8c3194c415a63ea69874419f8b7",
+  "reference_validation": {
+    "verified_by": "test_matrix_09_and_10_reference_reconciliation and isolated rebuild test",
+    "raw_rows": 105,
+    "valid_rows": 102,
+    "invalid_rows": 3,
+    "ledger_versions": 101,
+    "ready_events": 100,
+    "each_gold_accepted_event_sum": 100
+  },
+  "evidence_commit_note": "Only documentation changed after implementation_commit; the final evidence-only commit skips duplicate CI."
+}

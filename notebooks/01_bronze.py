@@ -1,29 +1,34 @@
 # Databricks notebook source
-# Bronze: append immutable JSONL lines with Trigger.AvailableNow.
-#
-# Local default: Spark structured streaming file source.
-# Databricks later: set use_auto_loader / TELEMETRY_USE_AUTO_LOADER=true.
-# Recorded runs in this repository use the local file source. A workspace
-# Auto Loader run has not been executed.
+# Auto Loader -> bronze. Input and checkpoints are persistent volume paths.
+from telemetry.orchestrator import config_from_env
 
-from __future__ import annotations
+PARAMETER_DEFAULTS = {
+    "backend": "databricks",
+    "catalog": "",
+    "namespace": "",
+    "events_path": "",
+    "customers_path": "",
+    "bronze_checkpoint": "",
+    "silver_checkpoint": "",
+    "stream_generation": "",
+    "job_run_id": "",
+    "use_auto_loader": "true",
+    "force_gold_assertion_failure": "false",
+}
+parameters = {}
+for name, default in PARAMETER_DEFAULTS.items():
+    try:
+        parameters[name] = dbutils.widgets.get(name)
+    except Exception:
+        dbutils.widgets.text(name, default)
+        parameters[name] = dbutils.widgets.get(name)
 
-import sys
-from pathlib import Path
+config = config_from_env(parameters=parameters)
+# The job environment installs telemetry without its Spark extra.
+# Use Databricks' provided Spark session; never initialize local[2] here.
+spark.conf.set("spark.sql.session.timeZone", "UTC")
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
+from telemetry.transforms import run_bronze
 
-from telemetry.orchestrator import config_from_env  # noqa: E402
-from telemetry.spark_session import get_spark  # noqa: E402
-from telemetry.transforms import run_bronze  # noqa: E402
-
-
-def main() -> None:
-    config = config_from_env()
-    spark = get_spark(config.warehouse, shuffle_partitions=config.shuffle_partitions)
-    run_bronze(spark, config)
-
-
-if __name__ == "__main__":
-    main()
+run_bronze(spark, config)
+print("BRONZE_COMPLETED", config.job_run_id)

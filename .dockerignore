@@ -1,0 +1,13 @@
+.git
+.venv
+.tools
+.databricks
+.bundle
+validation
+.pytest_cache
+**/__pycache__
+**/*.egg-info
+warehouse*
+checkpoints
+dist
+build
