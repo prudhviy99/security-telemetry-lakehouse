@@ -7,6 +7,7 @@ defaults = {
     "namespace_prefix": "stl_acceptance",
     "volume_root": "",
     "job_run_id": "",
+    "task_execution_count": "1",
     "include_failure_injection": "false",
     "include_extended_checks": "false",
     "reference_events_path": "",

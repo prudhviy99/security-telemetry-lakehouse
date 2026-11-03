@@ -103,4 +103,4 @@ resources:
           spec:
             environment_version: "${var.environment_version}"
             dependencies:
-              - ../dist/security_telemetry_lakehouse-0.1.1-py3-none-any.whl
+              - ../dist/security_telemetry_lakehouse-0.1.2-py3-none-any.whl

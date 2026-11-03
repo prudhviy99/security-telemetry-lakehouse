@@ -113,10 +113,21 @@ def run_cloud_acceptance(spark, parameters: dict[str, str],
             "additive_and_wrong_type_schema", "isolated_rebuild",
         ])
     report_path = root + "/result.json"
+    execution = parameters.get("task_execution_count", "1")
+    if not re.fullmatch(r"[1-9][0-9]*", execution):
+        raise ValueError("task_execution_count must be a positive integer")
+    report["task_execution_count"] = int(execution)
+
+    def save_report() -> None:
+        text = json.dumps(report, indent=2, sort_keys=True, default=str) + "\n"
+        # Preserve attempt history even if an operator explicitly repairs a run.
+        put_text(root + "/attempt-" + execution + "/result.json", text, True)
+        put_text(report_path, text, True)
 
     def check(name: str, observed) -> None:
         result = {"name": name, "status": "passed", "observed": observed}
         report["checks"].append(result)
+        save_report()
         print("CLOUD_CHECK " + json.dumps(result, sort_keys=True, default=str))
 
     def config_for(case: str, phase: str = "initial") -> PipelineConfig:
@@ -384,7 +395,7 @@ def run_cloud_acceptance(spark, parameters: dict[str, str],
         raise
     finally:
         report["finished_at"] = datetime.now(timezone.utc).isoformat()
-        put_text(report_path, json.dumps(report, indent=2, sort_keys=True, default=str) + "\n", True)
+        save_report()
         print("CLOUD_ACCEPTANCE_REPORT " + json.dumps(report, sort_keys=True, default=str))
         print("CLOUD_ACCEPTANCE_REPORT_PATH " + report_path)
     return report

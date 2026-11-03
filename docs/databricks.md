@@ -1,9 +1,9 @@
 # Run the project in Databricks
 
-The local implementation runs Spark and Delta. A real Databricks run is still
-needed to verify Auto Loader, serverless Spark Connect, Unity Catalog permissions,
-and Lakeflow Jobs together. No cloud success is claimed by this document or by
-building the bundle. Use synthetic data and a dedicated demo schema.
+The local implementation runs Spark and Delta. Reference pipeline runs and the basic cloud acceptance suite have succeeded.
+The 0.1.2 extended-test orchestration still needs a workspace retry. Building
+the bundle does not establish successful execution, and separate-principal
+permissions remain unverified. Use synthetic data and a dedicated demo schema.
 
 ## 1. Create a free learning workspace
 
@@ -124,7 +124,7 @@ they do not change every time the job runs. Both jobs have
 `max_concurrent_runs: 1`. Do not start notebook copies or another job against the
 same pipeline targets concurrently.
 
-The job environment selects `dist/security_telemetry_lakehouse-0.1.1-py3-none-any.whl` from the bundle artifact. Build it before standalone bundle validation. Older wheels in `dist` are not dependency candidates. It does not
+The job environment selects `dist/security_telemetry_lakehouse-0.1.2-py3-none-any.whl` from the bundle artifact. Build it before standalone bundle validation. Older wheels in `dist` are not dependency candidates. It does not
 install `.[spark]`, `pyspark`, or `delta-spark`: Databricks supplies those runtime
 components. Current Databricks supports a job environment override for notebook
 tasks. See [serverless dependency configuration](https://docs.databricks.com/aws/en/compute/serverless/dependencies)
@@ -266,3 +266,16 @@ The helper rebuilds/redeploys 0.1.1 and resumes the same ingestion history. It
 then reruns reference/replay and acceptance. Do not delete checkpoints, change
 generation, or create a new schema for this compatibility fix. The previous
 run's error does not establish final gold counts or a successful publication.
+
+
+## Extended failure-test orchestration (0.1.2)
+
+Both four-task pipeline runs and the basic acceptance run succeeded on 0.1.1. The extended run recorded deliberate `InjectedSinkFailure` errors for all six silver sinks, and later task attempts hit the existing-namespace guard. `max_retries: 0` does not disable serverless optimization retries. The task now also sets `disable_auto_optimization: true`; see the official [task settings](https://docs.databricks.com/aws/en/dev-tools/bundles/job-task-types#other-task-settings).
+
+A separate `verify_report` task runs with `ALL_DONE` after the producer has terminated. It requires the current run's passed report, all requested checks, exact reference/gold totals, and every recovered-state comparison. Failed, incomplete, wrong-run, or missing evidence fails this task. Per-execution report history is retained at `attempt-N/result.json`, alongside the latest `result.json`.
+
+Databricks can report `SUCCESS_WITH_FAILURES` when a deliberate-fault producer fails but its verification leaf succeeds. The helper preserves that actual job status. It only accepts that outcome after checking the Jobs API, successful verification task, complete measured report, and all six expected fault messages. Unrelated errors and namespace-collision retries remain failures. See [job status rules](https://docs.databricks.com/aws/en/jobs/monitor#how-databricks-determines-job-run-status).
+
+Use `--resume-from validation/databricks-deploy-20261103T055620Z.json --extended` with the deployment helper to reuse the two successful pipeline runs and basic acceptance. Resume requires unchanged pipeline code (package-version references may differ), identical input hashes, the same profile/workspace/catalog/schema, successful recorded Jobs API states, and the complete basic report. It deploys the corrected job definition and runs the unfinished extended suite in a fresh job-run namespace. Actual reports and Jobs API evidence are downloaded to `validation/` for review.
+
+Do not repair the failed old acceptance notebook in place or delete its schemas. Start a fresh job run through the helper and retain old evidence.

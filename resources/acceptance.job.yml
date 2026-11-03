@@ -24,6 +24,7 @@ resources:
         - task_key: cloud_acceptance
           environment_key: telemetry
           max_retries: 0
+          disable_auto_optimization: true
           notebook_task:
             notebook_path: ../notebooks/04_cloud_acceptance.py
             base_parameters:
@@ -31,13 +32,29 @@ resources:
               namespace_prefix: "{{job.parameters.namespace_prefix}}"
               volume_root: "{{job.parameters.volume_root}}"
               job_run_id: "{{job.run_id}}"
+              task_execution_count: "{{task.execution_count}}"
               include_failure_injection: "{{job.parameters.include_failure_injection}}"
               include_extended_checks: "{{job.parameters.include_extended_checks}}"
               reference_events_path: "{{job.parameters.reference_events_path}}"
               reference_customers_path: "{{job.parameters.reference_customers_path}}"
+        - task_key: verify_report
+          depends_on:
+            - task_key: cloud_acceptance
+          run_if: ALL_DONE
+          environment_key: telemetry
+          max_retries: 0
+          disable_auto_optimization: true
+          notebook_task:
+            notebook_path: ../notebooks/05_verify_cloud_acceptance.py
+            base_parameters:
+              volume_root: "{{job.parameters.volume_root}}"
+              job_run_id: "{{job.run_id}}"
+              include_failure_injection: "{{job.parameters.include_failure_injection}}"
+              include_extended_checks: "{{job.parameters.include_extended_checks}}"
+              upstream_result_state: "{{tasks.cloud_acceptance.result_state}}"
       environments:
         - environment_key: telemetry
           spec:
             environment_version: "${var.environment_version}"
             dependencies:
-              - ../dist/security_telemetry_lakehouse-0.1.1-py3-none-any.whl
+              - ../dist/security_telemetry_lakehouse-0.1.2-py3-none-any.whl

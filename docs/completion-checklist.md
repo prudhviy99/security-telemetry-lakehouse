@@ -9,10 +9,10 @@ is an older baseline while this PR remains open.
 | 0. Establish a baseline | Passed | Original commit `e4ba924`; completion implementation `e5b758b`. |
 | 1. Validation and Docker | Passed locally/in CI | Boundary regression tests, 15 Spark tests, image build and container smoke. |
 | 2. Recovery and integration CI | Passed locally/in CI | Persistent checkpoint registry, unsafe-reset rejection, isolated rebuild test, three successful CI jobs. |
-| 3. Databricks account and terminal auth | Partly complete | Free Edition browser session is signed in and CLI/profile are installed. The agent cannot retrieve the Keychain credential or resolve the workspace host; verify/run the deployment helper from a normal terminal. |
-| 4. Databricks adapter | Real run exposed a compatibility bug; fixed, retry pending | `REFRESH TABLE` now runs only locally; both job environments select 0.1.1. Three write-stage regressions pass. |
-| 5. Deploy and run reference job | Deployment passed; first run failed in silver | Both jobs deployed. Run 837260759008916 hit unsupported serverless refresh after the dimension write; gold/validation were skipped. Retry 0.1.1 with the same checkpoints. |
-| 6. Cloud acceptance and recovery | Pending | Run `telemetry_acceptance`, then its opt-in extended and failure-injection checks. Save actual reports. |
+| 3. Databricks account and terminal auth | Passed in the normal terminal | TELEMETRY successfully deployed and ran the jobs. The isolated agent process still lacks network/credential access. |
+| 4. Databricks adapter | Passed for reference pipeline and rerun | Both actual 0.1.1 four-task runs succeeded after the refresh fix. |
+| 5. Deploy and run reference job | Passed on 0.1.1 | Runs 673561808875428 and 629043682032596 succeeded. Preserve the same pipeline checkpoints. |
+| 6. Cloud acceptance and recovery | Basic passed; extended retry pending | Basic run 363703603959324 succeeded. Extended run failed in fault-test orchestration. Version 0.1.2 adds independent verification and a tested resume path; its cloud execution is pending. |
 | 7. Publish evidence | Local evidence complete; cloud evidence pending | Existing draft PR and successful CI are available. Add real workspace run URLs/counts and reports only after execution. |
 
 The observed console rejects automated browser control. The supported next step

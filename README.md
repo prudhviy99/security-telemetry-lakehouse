@@ -22,8 +22,8 @@ cd security-telemetry-lakehouse-review
 | Validation, version reconciliation, gold marts | 45 lightweight tests passed in CI. |
 | Local Spark/Delta, replay, recovery, isolated rebuild | 15 integration tests passed with no integration skips. |
 | Container | Image build and Spark/Delta smoke test passed in CI. |
-| Databricks adapter and serverless job bundle | Deployed. The first real run reached silver; its unsupported `REFRESH TABLE` call is fixed in 0.1.1. A cloud retry is pending. |
-| Auto Loader, Unity Catalog, Lakeflow results | First job/run recorded; final reference counts, publication, replay, and acceptance remain unverified. |
+| Databricks adapter and serverless job bundle | Deployed; both 0.1.1 four-task pipeline runs succeeded. |
+| Cloud acceptance | Basic suite succeeded. Extended recovery hit a test-orchestration failure; the 0.1.2 verification/resume fix awaits a workspace run. |
 | Reviewer permissions | Requires a genuine second principal; untested. |
 
 The [successful CI run](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41389013563) identifies the tested implementation commit. See [validation evidence](docs/evidence.md) and the [completion checklist](docs/completion-checklist.md) for the boundary between measured results and remaining work.
@@ -178,7 +178,7 @@ brew install python@3.12
 python3 scripts/deploy_databricks.py --extended
 ```
 
-The helper reuses the `TELEMETRY` profile and its existing secure credential storage. It does not export tokens, overwrite input files, delete checkpoints, create a schedule, or change grants. CLI logs and a source/input summary go under the ignored `validation/` directory. A successful command sequence still requires reviewing the measured acceptance report before publishing cloud counts.
+The helper reuses the `TELEMETRY` profile and its existing secure credential storage. It does not export tokens, overwrite input files, delete checkpoints, create a schedule, or change grants. CLI logs, source/input summaries, Jobs API states, and measured acceptance JSON go under the ignored `validation/` directory. The helper verifies reports and task outcomes before declaring the checks verified.
 
 A Free Edition account is enough to start this demo. A signed-in browser does not authenticate your terminal. Use the supported OAuth CLI flow, then select an actual catalog returned by your workspace:
 
@@ -239,3 +239,17 @@ After obtaining the fix, rerun `python3 scripts/deploy_databricks.py --extended`
 Reference scenario: `scenarios/reference.json` (fixed seed, 105 raw rows, 100 READY events, 3 invalid rows). Extend behavior by adding a scenario file. Do not silently retune the reference fixture.
 
 The optional anomaly or modeling extension in the build spec is not part of this repository.
+
+
+### Resume after the extended fault-test failure
+
+The 0.1.1 pipeline and rerun both succeeded, followed by the basic acceptance job. The extended job logged all six deliberate sink failures, then subsequent notebook attempts hit the existing-namespace safeguard. Version 0.1.2 disables serverless automatic optimization retries for acceptance and verifies its durable report in a separate `ALL_DONE` task. A fault run may legitimately show `SUCCESS_WITH_FAILURES`; the helper accepts it only if the independent verifier succeeds, the complete report passes, and the upstream trace contains exactly the six planned sink failures.
+
+From the same authenticated terminal, resume using the prior summary:
+
+```bash
+python3 scripts/deploy_databricks.py --extended \
+  --resume-from validation/databricks-deploy-20261103T055620Z.json
+```
+
+Before reusing a completed stage, the helper checks the prior source, input hashes, workspace, actual Jobs API success state, and basic acceptance report. It then redeploys 0.1.2 and runs the unfinished extended suite. Changed source/data, an incomplete report, or an unrelated failed task stops verification. No namespace or checkpoint deletion is required. A new job run uses fresh isolated acceptance schemas.

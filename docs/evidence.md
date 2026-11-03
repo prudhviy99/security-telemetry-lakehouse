@@ -143,3 +143,21 @@ the same regressions against the pre-fix source reproduces both unsupported
 serverless refresh failures. These are dependency-free boundary tests; they do
 not substitute for the pending workspace retry or full Spark execution of the fix.
 The existing schema, source files, stream generation, and checkpoints are retained.
+
+
+## Successful 0.1.1 pipeline and basic acceptance; extended harness failure
+
+The same helper log/summary `databricks-deploy-20261103T055620Z` records:
+
+| Run | Result | Pacific time / duration |
+| --- | --- | --- |
+| Pipeline `673561808875428` | SUCCESS | Nov 2, 21:56:40–21:59:46; 3m 6s |
+| Pipeline rerun `629043682032596` | SUCCESS | Nov 2, 21:59:50–22:02:26; 2m 36s |
+| Basic acceptance `363703603959324` | SUCCESS | Nov 2, 22:02:29–22:14:10; 11m 41s |
+| Extended acceptance `143069489210937` | FAILED | Nov 2, 22:14:12–22:59:18; 45m 6s |
+
+The extended error trace contains the deliberately injected failure at each of `classification`, `quarantine_invalid`, `ledger`, `current`, `quarantine_conflict`, and `audit`. Subsequent notebook attempts report `Acceptance namespace already exists`. These are observed errors; a complete extended pass is not claimed. The basic job's measured JSON has not yet been downloaded into the repository by the agent.
+
+All three [CI jobs for the 0.1.1 fix](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41585455038) completed successfully. Version 0.1.2 leaves the pipeline transformations unchanged and adjusts acceptance orchestration/reporting: disable automatic optimization retries, add a separate strict report-verification leaf, retain attempt reports, collect real Jobs API/report evidence, and resume verified prior successes.
+
+Twenty-three dependency-free tests pass for the write boundary, deployment safeguards, exact report verification, expected-vs-unexpected task failures, and resume execution. A direct source comparison against the recorded clean `d7e443d` checkout confirms that the pipeline inputs/code are eligible for resume (versioned wheel references are normalized). The 0.1.2 workspace retry remains pending. Unit tests and static schema checks do not establish that the new cloud job has run.
