@@ -106,6 +106,7 @@ available. The artifact build installs no local Spark dependencies on Databricks
 
 ```bash
 source .venv/bin/activate
+python -m pip wheel --no-deps --wheel-dir dist .
 databricks bundle validate -t dev --profile TELEMETRY --var catalog=YOUR_CATALOG
 databricks bundle deploy -t dev --profile TELEMETRY --var catalog=YOUR_CATALOG
 ```
@@ -123,7 +124,7 @@ they do not change every time the job runs. Both jobs have
 `max_concurrent_runs: 1`. Do not start notebook copies or another job against the
 same pipeline targets concurrently.
 
-The job environment installs `dist/*.whl` from the bundle artifact. It does not
+The job environment selects `dist/security_telemetry_lakehouse-0.1.1-py3-none-any.whl` from the bundle artifact. Build it before standalone bundle validation. Older wheels in `dist` are not dependency candidates. It does not
 install `.[spark]`, `pyspark`, or `delta-spark`: Databricks supplies those runtime
 components. Current Databricks supports a job environment override for notebook
 tasks. See [serverless dependency configuration](https://docs.databricks.com/aws/en/compute/serverless/dependencies)
@@ -243,3 +244,25 @@ run URLs and IDs, input counts/bytes, measured counts, report path, and observed
 failures/retries. Keep unexecuted checks marked pending. A successful bundle
 validation confirms configuration resolution; only completed workspace runs
 confirm Databricks behavior.
+
+
+## First-run serverless fix (0.1.1)
+
+The first real reference run deployed both jobs successfully, then stopped in
+`silver` after the customer snapshot write because `REFRESH TABLE` is unsupported
+on serverless compute. The 0.1.1 fix restricts this command to local path-backed
+tables in both the dimension and gold write paths. Managed-table writes and
+subsequent fresh queries remain the Databricks path. See the official
+[serverless limitations](https://docs.databricks.com/aws/en/compute/serverless/limitations#caching-limitations).
+
+Retain the existing schema, `v1` generation, input files, and both checkpoints.
+From the same authenticated normal terminal and updated checkout, rerun:
+
+```bash
+python3 scripts/deploy_databricks.py --extended
+```
+
+The helper rebuilds/redeploys 0.1.1 and resumes the same ingestion history. It
+then reruns reference/replay and acceptance. Do not delete checkpoints, change
+generation, or create a new schema for this compatibility fix. The previous
+run's error does not establish final gold counts or a successful publication.

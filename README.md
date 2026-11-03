@@ -22,8 +22,8 @@ cd security-telemetry-lakehouse-review
 | Validation, version reconciliation, gold marts | 45 lightweight tests passed in CI. |
 | Local Spark/Delta, replay, recovery, isolated rebuild | 15 integration tests passed with no integration skips. |
 | Container | Image build and Spark/Delta smoke test passed in CI. |
-| Databricks adapter and serverless job bundle | Implemented; workspace deployment and execution are pending. |
-| Auto Loader, Unity Catalog, Lakeflow results | No measured workspace run is recorded yet. |
+| Databricks adapter and serverless job bundle | Deployed. The first real run reached silver; its unsupported `REFRESH TABLE` call is fixed in 0.1.1. A cloud retry is pending. |
+| Auto Loader, Unity Catalog, Lakeflow results | First job/run recorded; final reference counts, publication, replay, and acceptance remain unverified. |
 | Reviewer permissions | Requires a genuine second principal; untested. |
 
 The [successful CI run](https://github.com/prudhviy99/security-telemetry-lakehouse/actions/runs/41389013563) identifies the tested implementation commit. See [validation evidence](docs/evidence.md) and the [completion checklist](docs/completion-checklist.md) for the boundary between measured results and remaining work.
@@ -195,6 +195,7 @@ Follow [Databricks setup](docs/databricks.md) to create the dedicated schema/man
 
 ```bash
 export TELEMETRY_CATALOG="YOUR_EXISTING_CATALOG"
+python -m pip wheel --no-deps --wheel-dir dist .
 databricks bundle validate -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG"
 databricks bundle deploy -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG"
 databricks bundle run -t dev -p TELEMETRY --var "catalog=$TELEMETRY_CATALOG" telemetry_pipeline
@@ -226,6 +227,12 @@ Record the actual job/run URLs and acceptance report before treating these expec
 - Workspace execution, permissions, and run IDs remain unverified until a real run succeeds. Local tests and a static bundle check do not establish cloud success.
 
 `python -m telemetry.orchestrator --print-job` prints only the local function outline; deploy the actual bundle for a workspace job.
+
+### Recovering from the first serverless run
+
+The first deployed run stopped in `silver` with `NOT_SUPPORTED_WITH_SERVERLESS: REFRESH TABLE`. Version 0.1.1 keeps refresh commands inside the local backend; Databricks managed-table writes use the existing serverless path. Both deployed jobs select the 0.1.1 wheel explicitly so older build artifacts cannot be selected as dependencies.
+
+After obtaining the fix, rerun `python3 scripts/deploy_databricks.py --extended` from the same checkout and authenticated normal terminal. Retain the same schema, generation, input files, and checkpoints. The helper verifies existing input bytes, redeploys the existing two jobs, and retries. The earlier silver ingestion checkpoint is reusable; no data or checkpoint reset is part of this fix.
 
 ## Layout
 

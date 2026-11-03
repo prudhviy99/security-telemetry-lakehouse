@@ -117,3 +117,29 @@ The CLI is now installed (v1.23.0), and a `TELEMETRY` profile points to the work
 `scripts/deploy_databricks.py` provides a supported normal-terminal handoff without exporting tokens or changing credential storage. It performs catalog selection, dedicated schema/managed-volume setup, byte-verified immutable uploads, bundle build/deploy, reference/no-op runs, and cloud acceptance. Extended recovery checks are opt-in. It writes actual CLI output and a source/input summary, while leaving measured cloud counts to the acceptance report.
 
 Six dependency-free tests passed with `python3 -m unittest tests.test_deploy_helper -v`. They cover actual-response catalog selection, rejection of an invented catalog, unchanged replay parameters, immutable-file reuse, mismatched-input rejection, and propagation of a remote-read failure. Help output, Python syntax, and whitespace checks passed. No new Spark or Databricks execution is claimed for this helper change; pipeline/runtime/container sources remain the versions covered by the earlier CI evidence.
+
+
+## First real workspace run: serverless refresh failure
+
+The normal-terminal helper log `databricks-deploy-20261103T045515Z.log` and its
+JSON summary record successful bundle validation and deployment: both jobs were
+created and 48 bundle files were uploaded. The selected catalog is `workspace`,
+with the dedicated `security_telemetry_demo` schema. The helper recorded input
+SHA-256 values `442b9499cc4b4943118990866e07df3263bff57a45bd59c9dce654372b647c01`
+(events) and `177c90ebb0fe3c0f2114c8175b83e2c5eb62ead9a6d4569d6bdb33feac113a9c`
+(customers), and local source commit `51b4d59` with no tracked modifications.
+
+[Pipeline run 837260759008916](https://dbc-03193c06-bea4.cloud.databricks.com/jobs/475857202225789/runs/837260759008916?o=7474656704611080)
+started on November 2, 2026 at 20:55 Pacific and failed at 20:59 in `silver`.
+The exception was `NOT_SUPPORTED_WITH_SERVERLESS: REFRESH TABLE is not supported
+on serverless compute` from `run_dimension`, after writing the customer snapshot.
+Gold and validation tasks were skipped. Replay and acceptance commands were not
+reached. No successful cloud publication or final reference metrics are claimed.
+
+Version 0.1.1 restricts both dimension and gold `REFRESH TABLE` calls to the local
+backend and pins both job dependencies to the new wheel filename. Three narrow
+write-stage regressions pass, together with six deployment-helper tests. Running
+the same regressions against the pre-fix source reproduces both unsupported
+serverless refresh failures. These are dependency-free boundary tests; they do
+not substitute for the pending workspace retry or full Spark execution of the fix.
+The existing schema, source files, stream generation, and checkpoints are retained.

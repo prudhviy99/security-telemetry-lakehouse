@@ -802,7 +802,7 @@ def run_dimension(spark: SparkSession, config: PipelineConfig) -> None:
     if config.backend == "local":
         path = config.table_path("dim_customer")
         spark.sql(f"CREATE TABLE IF NOT EXISTS {config.qualified('dim_customer')} USING DELTA LOCATION '{_location(path)}'")
-    spark.sql(f"REFRESH TABLE {config.qualified('dim_customer')}")
+        spark.sql(f"REFRESH TABLE {config.qualified('dim_customer')}")
 
 
 def _gold_select(scan_alias: str = "") -> str:
@@ -833,7 +833,7 @@ def _overwrite_sql(spark: SparkSession, config: PipelineConfig, table: str, sele
     if config.backend == "local":
         path = config.table_path(table)
         spark.sql(f"CREATE TABLE IF NOT EXISTS {qualified} USING DELTA LOCATION '{_location(path)}'")
-    spark.sql(f"REFRESH TABLE {qualified}")
+        spark.sql(f"REFRESH TABLE {qualified}")
 
 
 def run_gold(spark: SparkSession, config: PipelineConfig) -> None:
